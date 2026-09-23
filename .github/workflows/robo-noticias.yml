@@ -1,0 +1,54 @@
+name: Robo de noticias
+
+on:
+  schedule:
+    - cron: "*/30 * * * *"  # a cada 30 min (~1.440 min/mês, dentro dos 2.000 grátis do repo privado)
+  workflow_dispatch:         # botão "Run workflow" para rodar na mão
+    inputs:
+      teste:
+        description: "Só mandar uma mensagem de teste (Telegram/WhatsApp)"
+        type: boolean
+        default: false
+
+# nunca roda duas execuções ao mesmo tempo (evita alertas duplicados)
+concurrency:
+  group: robo-noticias
+  cancel-in-progress: false
+
+jobs:
+  rodar:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - run: pip install -r requirements.txt
+
+      # traz o noticias.db da execução anterior (histórico de notícias já enviadas)
+      - name: Restaurar histórico
+        uses: actions/cache/restore@v4
+        with:
+          path: noticias.db
+          key: noticias-db-${{ github.run_id }}
+          restore-keys: noticias-db-
+
+      - name: Rodar um ciclo (ou teste)
+        run: python robo_noticias.py ${{ inputs.teste && '--teste' || '--uma-vez' }}
+        env:
+          PYTHONUNBUFFERED: "1"
+          TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          WHATSAPP_FONE: ${{ secrets.WHATSAPP_FONE }}
+          WHATSAPP_APIKEY: ${{ secrets.WHATSAPP_APIKEY }}
+
+      - name: Salvar histórico
+        if: always() && !inputs.teste
+        uses: actions/cache/save@v4
+        with:
+          path: noticias.db
+          key: noticias-db-${{ github.run_id }}-${{ github.run_attempt }}
