@@ -2,7 +2,9 @@ name: Robo de noticias
 
 on:
   schedule:
-    - cron: "*/30 * * * *"  # a cada 30 min (repositório público: minutos ilimitados)
+    # a cada 30 min, em minutos "quebrados": nos minutos :00 e :30 o GitHub fica
+    # congestionado e costuma atrasar ou pular execuções agendadas
+    - cron: "7,37 * * * *"
   workflow_dispatch:         # botão "Run workflow" para rodar na mão
     inputs:
       teste:
@@ -15,14 +17,17 @@ concurrency:
   group: robo-noticias
   cancel-in-progress: false
 
+permissions:
+  contents: write            # só para o commit de "manter ativo" (ver último passo)
+
 jobs:
   rodar:
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
+    runs-on: ubuntu-24.04    # versão fixa: o ubuntu-latest muda sozinho de tempos em tempos
+    timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
           cache: pip
@@ -31,7 +36,7 @@ jobs:
 
       # traz o noticias.db da execução anterior (histórico de notícias já enviadas)
       - name: Restaurar histórico
-        uses: actions/cache/restore@v4
+        uses: actions/cache/restore@v6
         with:
           path: noticias.db
           key: noticias-db-${{ github.run_id }}
@@ -50,7 +55,20 @@ jobs:
 
       - name: Salvar histórico
         if: always() && !inputs.teste
-        uses: actions/cache/save@v4
+        uses: actions/cache/save@v6
         with:
           path: noticias.db
           key: noticias-db-${{ github.run_id }}-${{ github.run_attempt }}
+
+      # Em repositório público, o GitHub desliga o agendamento depois de 60 dias sem
+      # nenhum commit. Se o último commit tiver mais de 45 dias, faz um commit vazio.
+      - name: Manter o agendamento ativo
+        if: github.event_name == 'schedule'
+        run: |
+          idade=$(( $(date +%s) - $(git log -1 --format=%ct) ))
+          if [ "$idade" -gt $(( 45 * 86400 )) ]; then
+            git config user.name "github-actions[bot]"
+            git config user.email "41898283+github-actions[bot]@users.noreply.github.com"
+            git commit --allow-empty -m "Manter agendamento ativo"
+            git push
+          fi

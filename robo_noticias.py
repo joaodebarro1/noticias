@@ -146,6 +146,8 @@ banco_novo = not os.path.exists(ARQUIVO_DB)
 db = sqlite3.connect(ARQUIVO_DB)
 db.execute("""CREATE TABLE IF NOT EXISTS vistas (
     id TEXT PRIMARY KEY, tema TEXT, titulo TEXT, link TEXT, nota INTEGER, visto_em TEXT)""")
+# o histórico só precisa cobrir os últimos dias (notícias com mais de 2 dias são ignoradas)
+db.execute("DELETE FROM vistas WHERE visto_em < ?", ((datetime.now() - timedelta(days=7)).isoformat(),))
 db.commit()
 
 
