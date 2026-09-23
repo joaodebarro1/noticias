@@ -28,6 +28,7 @@
 #
 #  Seções especiais:
 #    [URGENTES]  palavras que somam pontos em qualquer assunto
+#    [IGNORAR]   palavras que descartam a notícia (ex.: notícias policiais em postos)
 #    [FONTES]    de onde vêm as notícias, um por linha:
 #                  agregador: google news   -> roda as buscas de cada assunto nele
 #                  agregador: bing news        (idem)
@@ -74,6 +75,9 @@ palavras: ultrapar=4, ugpa3=4, ipiranga=3
 
 [URGENTES]
 palavras: urgente=2, breaking=2, exclusivo=2, surpreend*=2, inesperad*=2
+
+[IGNORAR]
+palavras: assalt*, baleado*, tiroteio, homicídio, latrocínio, esfaque*
 
 [FONTES]
 # --- agregadores: as buscas de cada assunto rodam em todos ---

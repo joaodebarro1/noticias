@@ -99,8 +99,8 @@ def ler_fonte(linha: str, n: int):
 
 
 def carregar_temas(caminho: str):
-    """Lê temas.txt -> (temas, urgentes, fontes). Formato explicado no topo do arquivo."""
-    temas, urgentes, fontes = {}, {}, []
+    """Lê temas.txt -> (temas, urgentes, ignorar, fontes). Formato explicado no topo do arquivo."""
+    temas, urgentes, ignorar, fontes = {}, {}, {}, []
     secao = None
     with open(caminho, encoding="utf-8") as f:
         for n, linha in enumerate(f, 1):
@@ -109,7 +109,7 @@ def carregar_temas(caminho: str):
                 continue
             if linha.startswith("[") and linha.endswith("]"):
                 secao = linha[1:-1].strip()
-                if secao.upper() not in ("URGENTES", "FONTES"):
+                if secao.upper() not in ("URGENTES", "IGNORAR", "FONTES"):
                     temas.setdefault(secao, {"buscas": [], "palavras": {}})
                 continue
             if secao is None:
@@ -120,16 +120,17 @@ def carregar_temas(caminho: str):
             chave, _, valor = linha.partition(":")
             chave = chave.strip().lower()
             if chave == "palavras":
-                destino = urgentes if secao.upper() == "URGENTES" else temas[secao]["palavras"]
+                especiais = {"URGENTES": urgentes, "IGNORAR": ignorar}
+                destino = especiais.get(secao.upper(), temas.get(secao, {}).get("palavras"))
                 destino.update(ler_palavras(valor, n))
-            elif chave == "buscar" and secao.upper() != "URGENTES":
+            elif chave == "buscar" and secao.upper() not in ("URGENTES", "IGNORAR"):
                 temas[secao]["buscas"] += [b.strip() for b in valor.split(";") if b.strip()]
             else:
                 sys.exit(f"[temas.txt linha {n}] não entendi: '{linha}' (use 'buscar:' ou 'palavras:')")
-    return temas, urgentes, fontes
+    return temas, urgentes, ignorar, fontes
 
 
-TEMAS, URGENTES, FONTES = carregar_temas(ARQUIVO_TEMAS)
+TEMAS, URGENTES, IGNORAR, FONTES = carregar_temas(ARQUIVO_TEMAS)
 # sem nenhum "agregador:" no temas.txt, usa só o Google News
 AGREGADORES_ATIVOS = [v for t, v in FONTES if t == "agregador"] or ["google news"]
 PESOS = {}  # palavra -> maior peso em que aparece no temas.txt
@@ -152,7 +153,7 @@ db.commit()
 
 
 db.execute("CREATE TABLE IF NOT EXISTS meta (chave TEXT PRIMARY KEY, valor TEXT)")
-ASSINATURA_TEMAS = hashlib.md5(repr((TEMAS, URGENTES, FONTES)).encode()).hexdigest()
+ASSINATURA_TEMAS = hashlib.md5(repr((TEMAS, URGENTES, IGNORAR, FONTES)).encode()).hexdigest()
 _linha = db.execute("SELECT valor FROM meta WHERE chave='temas'").fetchone()
 temas_mudaram = _linha is None or _linha[0] != ASSINATURA_TEMAS
 
@@ -219,7 +220,7 @@ def ler_feed(url: str):
             titulo = e.get("title", "").strip()
             if titulo.startswith("http"):
                 continue  # alguns sites (ex.: gov.br) às vezes mandam um link no lugar do título
-            if len(PALAVRAS_ESPANHOL & set(sem_acento(titulo.lower()).split())) >= 2:
+            if parece_espanhol(titulo):
                 continue  # o Bing mistura notícias em espanhol (preços na Espanha, México...)
             fonte = e.get("source", {}).get("title") or e.get("news_source") or feed.feed.get("title", url)
             bruto = titulo
@@ -234,7 +235,15 @@ def ler_feed(url: str):
         print(f"[erro] {url}: {err}")
 
 
-PALAVRAS_ESPANHOL = {"el", "los", "del", "y", "su", "sus", "precio", "precios", "hoy", "segun", "gasolinera", "gasolineras"}
+PALAVRAS_ESPANHOL = {"el", "los", "las", "del", "y", "en", "su", "sus", "precio", "precios", "hoy", "segun",
+                     "gasolinera", "gasolineras", "puede", "pueden", "tiene", "tienes", "hacer", "cuando"}
+
+
+def parece_espanhol(titulo: str) -> bool:
+    palavras = re.findall(r"\w+", sem_acento(titulo.lower()))
+    # palavras típicas do espanhol + terminação -cion/-ciones (em português é -cao/-coes)
+    marcas = sum(p in PALAVRAS_ESPANHOL or p.endswith(("cion", "ciones")) for p in palavras)
+    return marcas >= 2
 
 
 def link_real(link: str) -> str:
@@ -287,6 +296,8 @@ def encontrada(palavra: str, texto: str) -> bool:
 def pontuar(texto: str):
     """-> (assunto principal, nota, tags por assunto) ou None se nenhuma palavra bateu."""
     t = sem_acento(texto.lower())
+    if any(encontrada(p, t) for p in IGNORAR):
+        return None
     tags, notas = {}, {}
     for tema, cfg in TEMAS.items():
         achadas = [p for p in cfg["palavras"] if encontrada(p, t)]
