@@ -21,6 +21,7 @@ Rodar:
 
 import os
 import re
+import calendar
 import sys
 import time
 import sqlite3
@@ -79,6 +80,24 @@ def ler_palavras(texto: str, n: int) -> dict:
     return palavras
 
 
+AGREGADORES = ("google news", "bing news")
+
+
+def ler_fonte(linha: str, n: int):
+    """Linha do [FONTES] -> ("agregador", nome) | ("rss", link) | ("busca", (termo, idioma))."""
+    if linha.lower().startswith("agregador:"):
+        nome = linha.partition(":")[2].strip().lower()
+        if nome not in AGREGADORES:
+            sys.exit(f"[temas.txt linha {n}] agregador desconhecido '{nome}' (use: {', '.join(AGREGADORES)})")
+        return "agregador", nome
+    if linha.startswith("http"):
+        return "rss", linha
+    # qualquer outra linha é uma busca extra no Google News; (en) no fim = edição em inglês
+    if linha.lower().endswith("(en)"):
+        return "busca", (linha[:-4].strip(), "en")
+    return "busca", (linha, "pt")
+
+
 def carregar_temas(caminho: str):
     """Lê temas.txt -> (temas, urgentes, fontes). Formato explicado no topo do arquivo."""
     temas, urgentes, fontes = {}, {}, []
@@ -96,7 +115,7 @@ def carregar_temas(caminho: str):
             if secao is None:
                 sys.exit(f"[temas.txt linha {n}] escreva o [NOME DO ASSUNTO] antes desta linha")
             if secao.upper() == "FONTES":
-                fontes.append(linha)
+                fontes.append(ler_fonte(linha, n))
                 continue
             chave, _, valor = linha.partition(":")
             chave = chave.strip().lower()
@@ -110,7 +129,9 @@ def carregar_temas(caminho: str):
     return temas, urgentes, fontes
 
 
-TEMAS, URGENTES, FEEDS_DIRETOS = carregar_temas(ARQUIVO_TEMAS)
+TEMAS, URGENTES, FONTES = carregar_temas(ARQUIVO_TEMAS)
+# sem nenhum "agregador:" no temas.txt, usa só o Google News
+AGREGADORES_ATIVOS = [v for t, v in FONTES if t == "agregador"] or ["google news"]
 PESOS = {}  # palavra -> maior peso em que aparece no temas.txt
 for _palavras in [c["palavras"] for c in TEMAS.values()] + [URGENTES]:
     for _p, _peso in _palavras.items():
@@ -129,7 +150,7 @@ db.commit()
 
 
 db.execute("CREATE TABLE IF NOT EXISTS meta (chave TEXT PRIMARY KEY, valor TEXT)")
-ASSINATURA_TEMAS = hashlib.md5(repr((TEMAS, URGENTES, FEEDS_DIRETOS)).encode()).hexdigest()
+ASSINATURA_TEMAS = hashlib.md5(repr((TEMAS, URGENTES, FONTES)).encode()).hexdigest()
 _linha = db.execute("SELECT valor FROM meta WHERE chave='temas'").fetchone()
 temas_mudaram = _linha is None or _linha[0] != ASSINATURA_TEMAS
 
@@ -162,9 +183,24 @@ def chave_noticia(titulo: str) -> str:
 # =========================================================
 
 
-def url_google_news(termo: str) -> str:
+def url_google_news(termo: str, idioma: str = "pt") -> str:
     q = urllib.parse.quote(f"{termo} when:1d")
+    if idioma == "en":  # sites em inglês (Reuters, Argus...) só aparecem na edição americana
+        return f"https://news.google.com/rss/search?q={q}&hl=en-US&gl=US&ceid=US:en"
     return f"https://news.google.com/rss/search?q={q}&hl=pt-BR&gl=BR&ceid=BR:pt-419"
+
+
+def url_bing_news(termo: str) -> str:
+    q = urllib.parse.quote(termo)
+    # interval="7" = últimas 24 horas
+    return f"https://www.bing.com/news/search?q={q}&format=rss&mkt=pt-BR&count=50&qft=interval%3d%227%22"
+
+
+def urls_de_busca(termo: str):
+    if "google news" in AGREGADORES_ATIVOS:
+        yield url_google_news(termo)
+    if "bing news" in AGREGADORES_ATIVOS:
+        yield url_bing_news(termo)
 
 
 def texto_limpo(html: str) -> str:
@@ -175,16 +211,28 @@ def ler_feed(url: str):
     try:
         feed = feedparser.parse(url, request_headers=NAVEGADOR)
         for e in feed.entries[:100]:  # Google News devolve até 100 por busca
+            publicada = e.get("published_parsed") or e.get("updated_parsed")
+            if publicada and time.time() - calendar.timegm(publicada) > 2 * 86400:
+                continue  # mais de 2 dias (o Bing às vezes devolve notícias antigas)
             titulo = e.get("title", "").strip()
-            fonte = e.get("source", {}).get("title") or feed.feed.get("title", url)
+            if titulo.startswith("http"):
+                continue  # alguns sites (ex.: gov.br) às vezes mandam um link no lugar do título
+            if len(PALAVRAS_ESPANHOL & set(sem_acento(titulo.lower()).split())) >= 2:
+                continue  # o Bing mistura notícias em espanhol (preços na Espanha, México...)
+            fonte = e.get("source", {}).get("title") or e.get("news_source") or feed.feed.get("title", url)
             bruto = titulo
             if titulo.endswith(f" - {fonte}"):  # Google News põe " - Fonte" no fim do título
                 titulo = titulo[: -len(f" - {fonte}")].strip()
+            link = e.get("link", "")
+            if "bing.com/news/apiclick" in link:  # link do Bing traz o endereço real no parâmetro url
+                link = urllib.parse.parse_qs(urllib.parse.urlparse(link).query).get("url", [link])[0]
             resumo = "" if "news.google.com" in url else texto_limpo(e.get("summary", ""))[:500]
-            yield {"titulo": titulo, "titulo_bruto": bruto, "link": e.get("link", ""),
-                   "resumo": resumo, "fonte": fonte}
+            yield {"titulo": titulo, "titulo_bruto": bruto, "link": link, "resumo": resumo, "fonte": fonte}
     except Exception as err:
         print(f"[erro] {url}: {err}")
+
+
+PALAVRAS_ESPANHOL = {"el", "los", "del", "y", "su", "sus", "precio", "precios", "hoy", "segun", "gasolinera", "gasolineras"}
 
 
 def link_real(link: str) -> str:
@@ -402,7 +450,9 @@ def enviadas_recentes():
 
 
 def coletar():
-    urls = [url_google_news(t) for cfg in TEMAS.values() for t in cfg["buscas"]] + FEEDS_DIRETOS
+    urls = [u for cfg in TEMAS.values() for t in cfg["buscas"] for u in urls_de_busca(t)]
+    urls += [v for t, v in FONTES if t == "rss"]
+    urls += [url_google_news(*v) for t, v in FONTES if t == "busca"]
     # várias buscas ao mesmo tempo (centenas de buscas em sequência levariam minutos)
     with ThreadPoolExecutor(max_workers=8) as pool:
         for noticias in pool.map(lambda u: list(ler_feed(u)), urls):
@@ -481,7 +531,8 @@ def teste():
     print("Telegram:", "configurado" if TELEGRAM_TOKEN and TELEGRAM_CHAT_ID else "NÃO configurado")
     print("WhatsApp:", "configurado" if WHATSAPP_FONE and WHATSAPP_APIKEY else "NÃO configurado")
     print("OpenAI:  ", f"configurado ({OPENAI_MODELO})" if OPENAI_API_KEY else "NÃO configurado (sem resumo)")
-    print(f"Assuntos: {len(TEMAS)} | fontes diretas: {len(FEEDS_DIRETOS)}")
+    print(f"Assuntos: {len(TEMAS)} | agregadores: {', '.join(AGREGADORES_ATIVOS)} | "
+          f"sites RSS: {sum(t == 'rss' for t, _ in FONTES)} | buscas extras: {sum(t == 'busca' for t, _ in FONTES)}")
     # manda as 3 notícias reais mais fortes do momento, no formato final (sem mexer no histórico)
     escolhidas = candidatas(ignorar_historico=True)[:3]
     if not montar_e_enviar(escolhidas, prefixo="🧪 TESTE\n", registrar_enviadas=False):

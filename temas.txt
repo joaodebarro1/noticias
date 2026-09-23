@@ -28,7 +28,12 @@
 #
 #  Seções especiais:
 #    [URGENTES]  palavras que somam pontos em qualquer assunto
-#    [FONTES]    sites (links RSS) lidos em todo ciclo, um por linha
+#    [FONTES]    de onde vêm as notícias, um por linha:
+#                  agregador: google news   -> roda as buscas de cada assunto nele
+#                  agregador: bing news        (idem)
+#                  https://...              -> RSS de um site, lido inteiro
+#                  site:dominio.com termos  -> busca extra no Google News
+#                  ... (en)                 -> busca na edição em inglês (Reuters, Argus...)
 #
 #  Ao mudar este arquivo, a próxima execução só memoriza as notícias
 #  existentes (sem enviar), para não chegar uma enxurrada de alertas.
@@ -36,15 +41,15 @@
 
 [COMBUSTÍVEIS]
 buscar:   combustíveis; diesel; diesel posto; postos combustíveis; revenda combustíveis; distribuidoras combustíveis; impostos combustíveis; ICMS combustíveis
-palavras: combustíve*=3, diesel=3, posto*=2, revenda=2, revendedor*=2, bandeira branca=2, distribuidora*=2, bomba=1, litro=1, preço*=1, reajust*=2, aumento=1, redução=1, alta=1, queda=1, paridade=2, ppi=2, importação=1, icms=2, cofins=2, cide=2, tribut*=1, imposto*=1, adulterad*=2, fraude*=2
+palavras: combustíve*=3, fuel*=3, diesel=3, posto*=2, revenda=2, revendedor*=2, bandeira branca=2, distribuidora*=2, bomba=1, litro=1, preço*=1, reajust*=2, aumento=1, redução=1, alta=1, queda=1, paridade=2, ppi=2, importação=1, icms=2, cofins=2, cide=2, tribut*=1, imposto*=1, adulterad*=2, fraude*=2, brazil*=1, price*=1
 
 [GASOLINA]
 buscar:   gasolina; preço gasolina; gasolina posto
-palavras: gasolina=3, octanagem=2, aditivada=2, premium=1, podium=1
+palavras: gasolina=3, gasoline=3, octanagem=2, aditivada=2, premium=1, podium=1
 
 [ETANOL]
 buscar:   etanol; "etanol anidro" OR "etanol hidratado" OR "etanol na gasolina"; usinas etanol; sucroenergético
-palavras: etanol=3, anidro=3, hidratado=2, mistura=2, usina*=2, sucroenerget*=2, sucroalcooleir*=2, cana=1, milho=1, biocombustíve*=2, biodiesel=2, renovabio=2, cbio*=2
+palavras: etanol=3, ethanol=3, anidro=3, anhydrous=3, hidratado=2, hydrous=2, mistura=2, usina*=2, sucroenerget*=2, sucroalcooleir*=2, cana=1, sugarcane=1, milho=1, corn=1, biocombustíve*=2, biofuel*=2, biodiesel=2, renovabio=2, cbio*=2
 
 [ANP]
 buscar:   ANP combustíveis; "Agência Nacional do Petróleo"; ANP multa OR fiscalização OR resolução
@@ -52,7 +57,7 @@ palavras: anp=4, agência nacional do petróleo=4, fiscaliza*=2, autua*=2, multa
 
 [PETROBRAS]
 buscar:   Petrobras; PETR4 OR PETR3; Petrobras gasolina OR diesel OR refinaria; Petrobras petróleo OR produção; juros Petrobras
-palavras: petrobras=4, petr3=4, petr4=4, refinaria*=2, refino=2, política de preços=2, petróleo=2, brent=2, dividendo*=2, lucro=1, resultado*=1, balanço=1, ações=1
+palavras: petrobras=4, petr3=4, petr4=4, refinaria*=2, refino=2, refiner*=2, crude=2, política de preços=2, petróleo=2, brent=2, dividendo*=2, lucro=1, resultado*=1, balanço=1, ações=1
 
 [VIBRA / BR]
 buscar:   "Vibra Energia" OR VBBR3 OR "BR Distribuidora"; Vibra postos OR combustíveis
@@ -71,5 +76,33 @@ palavras: ultrapar=4, ugpa3=4, ipiranga=3
 palavras: urgente=2, breaking=2, exclusivo=2, surpreend*=2, inesperad*=2
 
 [FONTES]
+# --- agregadores: as buscas de cada assunto rodam em todos ---
+agregador: google news
+agregador: bing news
+
+# --- Brasil: economia e negócios (RSS) ---
 https://www.infomoney.com.br/feed/
 https://g1.globo.com/rss/g1/economia/
+https://valor.globo.com/rss/valor
+https://exame.com/feed/
+https://www.estadao.com.br/arc/outboundfeeds/feeds/rss/sections/economia/
+https://feeds.folha.uol.com.br/mercado/rss091.xml
+https://www.bloomberglinea.com.br/arc/outboundfeeds/rss/?outputType=xml
+
+# --- energia, petróleo e combustíveis ---
+https://petronoticias.com.br/feed/
+https://www.novacana.com/rss
+site:brasilenergia.com.br
+
+# --- institucionais (sem RSS: busca no Google News) ---
+site:gov.br/anp
+site:gov.br/mme
+site:gov.br/cade
+site:epe.gov.br
+site:agencia.petrobras.com.br
+
+# --- agências internacionais (em inglês) ---
+site:reuters.com Brazil Petrobras OR ethanol OR gasoline OR diesel OR fuel (en)
+site:bloomberg.com Brazil Petrobras OR ethanol OR gasoline OR diesel OR fuel (en)
+site:argusmedia.com Brazil (en)
+site:spglobal.com Brazil (en)
