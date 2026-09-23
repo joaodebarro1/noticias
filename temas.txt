@@ -1,5 +1,33 @@
 # =====================================================================
 #  ASSUNTOS DO ROBÔ DE NOTÍCIAS
+#  Edite à vontade (dá para editar direto no site do GitHub, no lápis ✏️).
+#  Linhas começando com # são ignoradas.
+#
+#  Cada assunto começa com o nome entre colchetes:  [NOME DO ASSUNTO]
+#    buscar:    o que pesquisar no Google News, separado por ;
+#    palavras:  palavra=peso, separadas por vírgula (peso: 1 fraco, 2 médio, 3 forte)
+#
+#  Como as palavras são encontradas:
+#    - maiúsculas e acentos não importam (raizen = Raízen)
+#    - a palavra precisa aparecer inteira (fed NÃO pega "federal")
+#    - * aceita variações: inesperad* -> inesperado/inesperada;
+#      preço* da gasolina -> "preço da gasolina" e "preços da gasolina"
+#    - dá para usar expressões: bandeira branca=3
+#
+#  Para uma notícia ser enviada, precisa ter:
+#    - pelo menos 2 palavras diferentes da lista (plural/singular contam como uma)
+#    - nota 2 ou mais. Nota = soma dos pesos do assunto mais forte + URGENTES
+#      🔴 nota 5 ou mais    🟡 nota 3 a 4    ⚪ nota 2
+#
+#  Evite palavras genéricas (alta, queda, preço, mercado...): elas disparam
+#  notícias de qualquer assunto. Prefira expressões (preço* da gasolina).
+#
+#  Seções especiais:
+#    [URGENTES]  palavras que somam pontos em qualquer assunto
+#    [FONTES]    sites (links RSS) lidos em todo ciclo, um por linha
+#
+#  Ao mudar este arquivo, a próxima execução só memoriza as notícias
+#  existentes (sem enviar), para não chegar uma enxurrada de alertas.
 # =====================================================================
 
 # ---------------------------------------------------------------------
@@ -8,15 +36,15 @@
 
 [PETRÓLEO]
 buscar: petróleo Brent; petróleo WTI; preço petróleo; mercado petróleo; petróleo Brasil; petróleo Petrobras; produção petróleo Brasil; produção petróleo Petrobras; OPEP; OPEP+; OPEC; OPEC+; petróleo Oriente Médio; petróleo Estados Unidos; petróleo Rússia
-palavras: petróleo=3, brent=3, wti=3, petrobras=3, opep=3, opec=3, produção=2, oferta=2, demanda=2, barril=2, refino=2, derivados=2, estoque=2, Oriente Médio=2, Rússia=2
+palavras: petróleo=3, brent=3, wti=3, petrobras=3, opep=3, opec=3, barril=2, refino=2, derivados=2, estoque=2, Oriente Médio=2, Rússia=2
 
 [PREÇO DO PETRÓLEO]
 buscar: preço petróleo Brent; cotação Brent; petróleo Brent alta; petróleo Brent queda; petróleo preço barril; petróleo dólar; petróleo mercado internacional
-palavras: brent=3, petróleo=3, barril=3, cotação=2, preço=2, alta=1, queda=1, oferta=2, demanda=2, produção=2
+palavras: brent=3, petróleo=3, barril=3, preço* do petróleo=3
 
 [OPEP / OPEP+]
 buscar: OPEP produção petróleo; OPEP+ petróleo; OPEC production; OPEC+ oil; corte produção petróleo; aumento produção petróleo
-palavras: opep=3, opec=3, produção=3, corte=3, petróleo=2, oferta=2, barril=2, saudita=2
+palavras: opep=3, opec=3, petróleo=2, barril=2, saudita=2, corte* de produção=3
 
 
 # ---------------------------------------------------------------------
@@ -25,15 +53,15 @@ palavras: opep=3, opec=3, produção=3, corte=3, petróleo=2, oferta=2, barril=2
 
 [REFINO]
 buscar: refinaria Brasil; refinarias Petrobras; capacidade refino; utilização refinarias; margem refino; refino petróleo; produção derivados
-palavras: refinaria=3, refino=3, petrobras=3, derivados=2, capacidade=2, produção=2, margem=2, utilização=2
+palavras: refinaria=3, refino=3, petrobras=3, derivados=2
 
 [DERIVADOS DE PETRÓLEO]
 buscar: derivados petróleo; derivados Brasil; produção derivados; importação derivados; exportação derivados
-palavras: derivados=3, petróleo=2, gasolina=2, diesel=2, importação=2, exportação=2, produção=2
+palavras: derivados=3, petróleo=2, gasolina=2, diesel=2, importação=2, exportação=2
 
 [MARGEM DE REFINO]
 buscar: margem refino; crack spread; margem refinaria; margem gasolina; margem diesel
-palavras: margem=3, refino=3, refinaria=3, crack=3, spread=2, gasolina=2, diesel=2
+palavras: refino=3, refinaria=3, crack=3, spread=2, gasolina=2, diesel=2, margem de refino=3
 
 
 # ---------------------------------------------------------------------
@@ -42,19 +70,19 @@ palavras: margem=3, refino=3, refinaria=3, crack=3, spread=2, gasolina=2, diesel
 
 [GASOLINA]
 buscar: gasolina Brasil; gasolina preço; gasolina Petrobras; gasolina ANP; gasolina posto; gasolina consumidor; gasolina distribuidora
-palavras: gasolina=3, combustível=2, combustíveis=2, preço=2, petrobras=2, anp=2, posto=2, distribuidora=2
+palavras: gasolina=3, combustível=2, combustíveis=2, petrobras=2, anp=2, posto=2, distribuidora=2
 
 [PREÇO DA GASOLINA]
 buscar: preço gasolina; gasolina preço posto; preço médio gasolina; preço gasolina ANP; aumento gasolina; redução gasolina; gasolina sobe; gasolina cai
-palavras: gasolina=3, preço=3, posto=2, ANP=2, aumento=2, redução=2, sobe=2, cai=2, consumidor=2
+palavras: gasolina=3, posto=2, ANP=2, preço* da gasolina=3
 
 [GASOLINA A]
 buscar: gasolina A; preço gasolina A; gasolina A Petrobras; gasolina A refinaria; gasolina A distribuidora
-palavras: gasolina=3, preço=3, refinaria=2, petrobras=3, distribuidora=2
+palavras: gasolina=3, refinaria=2, petrobras=3, distribuidora=2
 
 [GASOLINA C]
 buscar: gasolina C; preço gasolina C; gasolina C posto; gasolina C ANP; gasolina C consumidor
-palavras: gasolina=3, gasolina C=3, preço=3, posto=2, ANP=2, consumidor=2
+palavras: gasolina=3, gasolina C=3, posto=2, ANP=2
 
 [GASOLINA PREMIUM]
 buscar: gasolina premium; gasolina podium; gasolina premium Petrobras; gasolina alta octanagem
@@ -62,7 +90,7 @@ palavras: gasolina=3, premium=3, podium=3, octanagem=2, combustível=2
 
 [OCTANAGEM / QUALIDADE GASOLINA]
 buscar: octanagem gasolina; qualidade gasolina; especificação gasolina; RON gasolina; MON gasolina; gasolina aditivada
-palavras: octanagem=3, gasolina=3, qualidade=2, especificação=2, RON=2, MON=2, aditivada=2
+palavras: octanagem=3, gasolina=3, aditivada=2
 
 
 # ---------------------------------------------------------------------
@@ -71,31 +99,31 @@ palavras: octanagem=3, gasolina=3, qualidade=2, especificação=2, RON=2, MON=2,
 
 [ETANOL]
 buscar: etanol Brasil; preço etanol; etanol combustível; mercado etanol; produção etanol; consumo etanol
-palavras: etanol=3, preço=2, combustível=2, produção=2, consumo=2, mercado=2
+palavras: etanol=3, combustível=2
 
 [ETANOL ANIDRO]
 buscar: etanol anidro; preço etanol anidro; etanol anidro gasolina; mistura gasolina etanol; anidro ANP; anidro distribuidora
-palavras: anidro=3, etanol=3, gasolina=2, preço=2, mistura=3, ANP=2, distribuidora=2
+palavras: anidro=3, etanol=3, gasolina=2, mistura=3, ANP=2, distribuidora=2
 
 [ETANOL HIDRATADO]
 buscar: etanol hidratado; preço etanol hidratado; etanol posto; etanol consumidor; etanol combustível
-palavras: hidratado=3, etanol=3, preço=2, posto=2, consumidor=2, combustível=2
+palavras: hidratado=3, etanol=3, posto=2, combustível=2
 
 [ETANOL DE MILHO]
 buscar: etanol milho; produção etanol milho; usina milho etanol; preço milho etanol
-palavras: etanol=3, milho=3, produção=2, usina=2
+palavras: etanol=3, milho=3, usina=2
 
 [ETANOL DE CANA]
 buscar: etanol cana; produção etanol cana; cana etanol; usina etanol
-palavras: etanol=3, cana=3, produção=2, usina=2
+palavras: etanol=3, cana=3, usina=2
 
 [PREÇO ETANOL]
 buscar: preço etanol; preço etanol hidratado; preço etanol anidro; etanol alta; etanol queda
-palavras: etanol=3, preço=3, anidro=2, hidratado=2, alta=1, queda=1
+palavras: etanol=3, anidro=2, hidratado=2, preço* do etanol=3
 
 [RELAÇÃO GASOLINA ETANOL]
 buscar: relação gasolina etanol; gasolina ou etanol; competitividade etanol gasolina; preço gasolina etanol; paridade etanol gasolina
-palavras: gasolina=3, etanol=3, paridade=3, relação=2, preço=2, competitividade=2
+palavras: gasolina=3, etanol=3, paridade=3, competitividade=2
 
 
 # ---------------------------------------------------------------------
@@ -104,19 +132,19 @@ palavras: gasolina=3, etanol=3, paridade=3, relação=2, preço=2, competitivida
 
 [CANA / SAFRA]
 buscar: safra cana; moagem cana; produção cana; safra sucroenergética; cana-de-açúcar; produção açúcar etanol
-palavras: cana=3, safra=3, moagem=3, açúcar=2, etanol=2, produção=2, usina=2
+palavras: cana=3, safra=3, moagem=3, açúcar=2, etanol=2, usina=2
 
 [ATR]
 buscar: ATR cana; preço ATR; ATR etanol; ATR açúcar; qualidade cana
-palavras: ATR=3, cana=3, etanol=2, açúcar=2, preço=2
+palavras: ATR=3, cana=3, etanol=2, açúcar=2
 
 [MIX AÇÚCAR ETANOL]
 buscar: mix açúcar etanol; produção açúcar etanol; usina mix; decisão açúcar etanol
-palavras: açúcar=3, etanol=3, mix=3, usina=2, produção=2
+palavras: açúcar=3, etanol=3, usina=2
 
 [AÇÚCAR]
 buscar: preço açúcar NY; açúcar mercado internacional; açúcar usinas Brasil; açúcar etanol
-palavras: açúcar=3, preço=2, NY=2, usina=2, etanol=2, exportação=2
+palavras: açúcar=3, usina=2, etanol=2, exportação=2
 
 
 # ---------------------------------------------------------------------
@@ -125,27 +153,27 @@ palavras: açúcar=3, preço=2, NY=2, usina=2, etanol=2, exportação=2
 
 [FORMAÇÃO DE PREÇO]
 buscar: formação preço gasolina; formação preço combustível; composição preço gasolina; preço combustível Brasil; preço gasolina distribuidora posto
-palavras: preço=3, gasolina=3, combustível=3, formação=3, composição=3, posto=2, distribuidora=2
+palavras: gasolina=3, combustível=3, formação=3, composição=3, posto=2, distribuidora=2, preço* dos combustíveis=3
 
 [PREÇO REFINARIA]
 buscar: preço refinaria gasolina; preço gasolina Petrobras; preço refinaria Petrobras; preço gasolina refinaria
-palavras: preço=3, refinaria=3, gasolina=3, petrobras=3, combustível=2
+palavras: refinaria=3, gasolina=3, petrobras=3, combustível=2
 
 [PREÇO DISTRIBUIDORA]
 buscar: preço gasolina distribuidora; preço combustível distribuidora; margem distribuidora; preço distribuidora posto
-palavras: distribuidora=3, preço=3, gasolina=3, combustível=2, margem=2, posto=2
+palavras: distribuidora=3, gasolina=3, combustível=2, posto=2
 
 [MARGEM COMBUSTÍVEIS]
 buscar: margem gasolina; margem combustível; margem distribuidora; margem posto; margem revenda; margem gasolina posto
-palavras: margem=3, gasolina=3, combustível=3, distribuidora=2, posto=2, revenda=2
+palavras: gasolina=3, combustível=3, distribuidora=2, posto=2, revenda=2, margem de revenda=3, margem de distribuição=3
 
 [REPASSE DE PREÇOS]
 buscar: repasse preço gasolina; repasse combustível; reajuste gasolina; aumento gasolina; redução gasolina; preço Petrobras repasse
-palavras: repasse=3, gasolina=3, preço=3, combustível=2, reajuste=2, aumento=2, redução=2
+palavras: repasse=3, gasolina=3, combustível=2, reajuste=2
 
 [PARIDADE INTERNACIONAL]
 buscar: paridade internacional gasolina; preço paridade importação; PPI gasolina; paridade petróleo combustível; preço internacional gasolina Brasil
-palavras: paridade=3, internacional=2, gasolina=3, PPI=3, petróleo=2, importação=2
+palavras: paridade=3, gasolina=3, PPI=3, petróleo=2, importação=2
 
 
 # ---------------------------------------------------------------------
@@ -158,23 +186,23 @@ palavras: posto=3, postos=3, combustível=2, gasolina=2, ANP=2, revenda=3
 
 [REVENDA DE COMBUSTÍVEIS]
 buscar: revenda combustíveis; revendedor combustível; revenda gasolina; revenda etanol; margem revenda
-palavras: revenda=3, revendedor=3, combustível=3, gasolina=2, etanol=2, margem=2
+palavras: revenda=3, revendedor=3, combustível=3, gasolina=2, etanol=2
 
 [PREÇO NA BOMBA]
 buscar: preço bomba gasolina; preço bomba etanol; preço combustível posto; preço médio posto; gasolina bomba
-palavras: preço=3, bomba=3, gasolina=3, etanol=2, posto=2, combustível=2
+palavras: bomba=3, gasolina=3, etanol=2, posto=2, combustível=2
 
 [BANDEIRA BRANCA]
 buscar: posto bandeira branca; bandeira branca combustíveis; postos bandeira branca; distribuidora bandeira branca
-palavras: bandeira=3, branca=3, posto=3, combustíveis=2, distribuidora=2
+palavras: posto=3, combustíveis=2, distribuidora=2, bandeira branca=3
 
 [MARKET SHARE COMBUSTÍVEIS]
 buscar: market share combustíveis; participação mercado gasolina; participação distribuidoras; mercado distribuição combustíveis
-palavras: market=3, share=3, participação=3, distribuidora=3, combustíveis=2, gasolina=2
+palavras: distribuidora=3, combustíveis=2, gasolina=2, market share=3, participação de mercado=3
 
 [VENDAS COMBUSTÍVEIS]
 buscar: vendas gasolina; vendas etanol; vendas combustíveis; volume vendas combustível; consumo gasolina Brasil
-palavras: vendas=3, gasolina=3, etanol=2, combustíveis=3, volume=2, consumo=2
+palavras: vendas=3, gasolina=3, etanol=2, combustíveis=3
 
 
 # ---------------------------------------------------------------------
@@ -187,11 +215,11 @@ palavras: distribuição=3, distribuidora=3, combustíveis=3, gasolina=2, etanol
 
 [LOGÍSTICA COMBUSTÍVEIS]
 buscar: logística combustíveis; transporte combustíveis; frete combustível; logística gasolina; logística etanol
-palavras: logística=3, transporte=2, frete=3, combustível=3, gasolina=2, etanol=2
+palavras: logística=3, frete=3, combustível=3, gasolina=2, etanol=2
 
 [TERMINAIS / TANCAGEM]
 buscar: terminal combustível; terminal gasolina; tancagem combustível; armazenamento combustível; armazenagem combustíveis
-palavras: terminal=3, tancagem=3, armazenamento=3, armazenagem=3, combustível=2, gasolina=2
+palavras: tancagem=3, armazenamento=3, armazenagem=3, combustível=2, gasolina=2
 
 [IMPORTAÇÃO COMBUSTÍVEIS]
 buscar: importação gasolina Brasil; importação etanol; importação diesel; importação combustível; importação derivados
@@ -212,11 +240,11 @@ palavras: ANP=3, combustíveis=3, gasolina=2, etanol=2, postos=2, distribuidoras
 
 [AGÊNCIA NACIONAL DO PETRÓLEO]
 buscar: Agência Nacional do Petróleo; Agência Nacional do Petróleo Gás Natural Biocombustíveis; ANP regulamentação
-palavras: agência=2, nacional=1, petróleo=3, ANP=3, regulamentação=2
+palavras: petróleo=3, ANP=3, regulamentação=2
 
 [REGULAÇÃO COMBUSTÍVEIS]
 buscar: regulamentação combustíveis; nova regra combustíveis; resolução ANP combustível; legislação combustíveis
-palavras: regulamentação=3, resolução=3, ANP=3, combustível=3, legislação=2, regra=2
+palavras: regulamentação=3, resolução=3, ANP=3, combustível=3, legislação=2
 
 [FISCALIZAÇÃO ANP]
 buscar: fiscalização ANP; fiscalização postos; fiscalização combustíveis; irregularidade posto combustível; fraude combustível
@@ -224,7 +252,7 @@ palavras: fiscalização=3, ANP=3, posto=2, combustível=3, fraude=3, irregulari
 
 [QUALIDADE COMBUSTÍVEIS]
 buscar: qualidade combustível ANP; combustível adulterado; gasolina adulterada; etanol adulterado; fiscalização qualidade combustível
-palavras: qualidade=3, combustível=3, adulterado=3, gasolina=2, etanol=2, ANP=3
+palavras: combustível=3, adulterad*=3, gasolina=2, etanol=2, ANP=3
 
 
 # ---------------------------------------------------------------------
@@ -262,7 +290,7 @@ palavras: petrobras=3, gasolina=3, petróleo=2, combustível=3, refino=3
 
 [PETROBRAS PREÇOS]
 buscar: Petrobras preço gasolina; Petrobras reajuste gasolina; Petrobras preço combustível; Petrobras política preços
-palavras: petrobras=3, preço=3, gasolina=3, reajuste=3, combustível=2, política=2
+palavras: petrobras=3, gasolina=3, reajuste=3, combustível=2
 
 [PETROBRAS DISTRIBUIÇÃO]
 buscar: Petrobras distribuição combustíveis; Petrobras postos; BR Distribuidora; Vibra Petrobras
@@ -275,7 +303,7 @@ palavras: petrobras=3, distribuição=3, postos=2, combustível=3
 
 [VIBRA]
 buscar: Vibra Energia; Vibra gasolina; Vibra combustíveis; Vibra postos; VBBR3
-palavras: vibra=3, VBBR3=3, gasolina=2, combustíveis=3, postos=2, margem=2
+palavras: vibra=3, VBBR3=3, gasolina=2, combustíveis=3, postos=2
 
 [RAÍZEN]
 buscar: Raízen; Raízen combustíveis; Raízen etanol; Raízen gasolina; RAIZ4
@@ -283,7 +311,7 @@ palavras: raizen=3, RAIZ4=3, combustíveis=3, etanol=3, gasolina=2
 
 [COSAN]
 buscar: Cosan; Cosan combustíveis; Cosan energia; CSAN3; Cosan Raízen
-palavras: cosan=3, CSAN3=3, energia=2, combustíveis=2, raizen=2
+palavras: cosan=3, CSAN3=3, combustíveis=2, raizen=2
 
 [IPIRANGA]
 buscar: Ipiranga combustíveis; Ipiranga gasolina; Ipiranga postos; Ipiranga Ultrapar; UGPA3
@@ -299,7 +327,7 @@ palavras: shell=3, gasolina=2, combustíveis=3, postos=3, etanol=2, raizen=2
 
 [OUTRAS DISTRIBUIDORAS]
 buscar: distribuidoras combustíveis Brasil; distribuidora gasolina Brasil; distribuidora etanol Brasil
-palavras: distribuidora=3, combustíveis=3, gasolina=2, etanol=2, mercado=2
+palavras: distribuidora=3, combustíveis=3, gasolina=2, etanol=2
 
 
 # ---------------------------------------------------------------------
@@ -308,7 +336,7 @@ palavras: distribuidora=3, combustíveis=3, gasolina=2, etanol=2, mercado=2
 
 [RESULTADOS EMPRESAS COMBUSTÍVEIS]
 buscar: resultados Petrobras; resultados Vibra; resultados Raízen; resultados Cosan; resultados Ultrapar; balanço combustíveis
-palavras: resultados=3, balanço=3, EBITDA=3, lucro=2, receita=2, margem=2, combustíveis=2
+palavras: resultados=3, balanço=3, EBITDA=3, lucro=2, receita=2, combustíveis=2
 
 [PETR3 PETR4]
 buscar: PETR3; PETR4; Petrobras ações; Petrobras resultados
@@ -358,7 +386,7 @@ palavras: dólar=3, câmbio=3, gasolina=2, petróleo=2, combustível=2, petrobra
 
 [INFLAÇÃO]
 buscar: inflação gasolina; IPCA gasolina; IPCA combustíveis; inflação combustíveis; preço gasolina inflação
-palavras: inflação=3, IPCA=3, gasolina=3, combustíveis=3, preço=2
+palavras: inflação=3, IPCA=3, gasolina=3, combustíveis=3
 
 [JUROS]
 buscar: Selic combustíveis; juros Petrobras; juros empresas combustíveis; Selic economia combustível
@@ -366,7 +394,7 @@ palavras: selic=3, juros=2, combustível=2, petrobras=2
 
 [ECONOMIA / CONSUMO]
 buscar: consumo combustíveis Brasil; demanda gasolina Brasil; demanda etanol Brasil; vendas combustíveis Brasil
-palavras: consumo=3, demanda=3, combustíveis=3, gasolina=2, etanol=2, vendas=2
+palavras: combustíveis=3, gasolina=2, etanol=2, vendas=2, consumo de combustíveis=3
 
 
 # ---------------------------------------------------------------------
@@ -383,11 +411,11 @@ palavras: estoque=3, estoques=3, petróleo=2, gasolina=2, EIA=3, crude=2
 
 [IEA / AGÊNCIA INTERNACIONAL DE ENERGIA]
 buscar: IEA petróleo; International Energy Agency oil; IEA demand oil; IEA gasoline
-palavras: IEA=3, petróleo=3, oil=2, demanda=2, energia=2
+palavras: IEA=3, petróleo=3
 
 [CHINA / PETRÓLEO]
 buscar: China petróleo demanda; China combustível; China gasolina; China petróleo importação
-palavras: China=3, petróleo=3, demanda=3, combustível=2, gasolina=2
+palavras: China=3, petróleo=3, combustível=2, gasolina=2
 
 [RÚSSIA / PETRÓLEO]
 buscar: Rússia petróleo; Rússia gasolina; sanções petróleo Rússia; exportação petróleo Rússia
@@ -400,11 +428,11 @@ palavras: Rússia=3, petróleo=3, gasolina=2, sanções=3, exportação=2
 
 [RENOVABIO]
 buscar: RenovaBio; RenovaBio combustíveis; política biocombustíveis; metas RenovaBio
-palavras: RenovaBio=3, biocombustíveis=3, metas=2, combustível=2
+palavras: RenovaBio=3, biocombustíveis=3, combustível=2
 
 [CBIO]
 buscar: CBIO; preço CBIO; crédito descarbonização CBIO; RenovaBio CBIO
-palavras: CBIO=3, RenovaBio=3, descarbonização=2, preço=2
+palavras: CBIO=3, RenovaBio=3, descarbonização=2
 
 [BIOCOMBUSTÍVEIS]
 buscar: biocombustíveis Brasil; política biocombustíveis; biocombustíveis ANP; etanol biodiesel
@@ -417,11 +445,11 @@ palavras: biocombustíveis=3, etanol=3, biodiesel=2, ANP=2
 
 [DIESEL]
 buscar: diesel Brasil; preço diesel; diesel Petrobras; diesel ANP; diesel posto; diesel distribuidora
-palavras: diesel=3, preço=3, petrobras=2, ANP=2, posto=2, distribuidora=2
+palavras: diesel=3, petrobras=2, ANP=2, posto=2, distribuidora=2
 
 [PREÇO DIESEL]
 buscar: preço diesel; preço diesel posto; preço diesel Petrobras; aumento diesel; redução diesel
-palavras: diesel=3, preço=3, posto=2, petrobras=2, aumento=2, redução=2
+palavras: diesel=3, posto=2, petrobras=2, preço* do diesel=3
 
 
 # ---------------------------------------------------------------------
@@ -430,11 +458,11 @@ palavras: diesel=3, preço=3, posto=2, petrobras=2, aumento=2, redução=2
 
 [FRETE]
 buscar: frete combustível; frete gasolina; frete etanol; custo transporte combustível
-palavras: frete=3, combustível=3, gasolina=2, etanol=2, transporte=2
+palavras: frete=3, combustível=3, gasolina=2, etanol=2
 
 [CUSTO LOGÍSTICO]
 buscar: custo logística combustível; custo transporte gasolina; logística distribuição combustível
-palavras: custo=3, logística=3, combustível=3, distribuição=2, gasolina=2
+palavras: logística=3, combustível=3, distribuição=2, gasolina=2
 
 
 # ---------------------------------------------------------------------
@@ -443,7 +471,7 @@ palavras: custo=3, logística=3, combustível=3, distribuição=2, gasolina=2
 
 [PORTOS / TERMINAIS]
 buscar: porto petróleo Brasil; terminal combustíveis; terminal gasolina; terminal etanol; infraestrutura petróleo
-palavras: porto=2, terminal=3, combustíveis=3, petróleo=2, gasolina=2, etanol=2
+palavras: combustíveis=3, petróleo=2, gasolina=2, etanol=2
 
 [DUTOS]
 buscar: dutos petróleo Brasil; oleoduto combustível; gasoduto petróleo; transporte petróleo duto
@@ -455,7 +483,7 @@ palavras: duto=3, oleoduto=3, petróleo=2, combustível=2
 # ---------------------------------------------------------------------
 
 [URGENTES]
-palavras: urgente=3, breaking=3, exclusivo=2, surpreend*=2, inesperad*=2, Petrobras=2, gasolina=2, etanol=2, combustível=2, ANP=2, petróleo=2, Brent=2
+palavras: urgente=3, breaking=3, exclusivo=2, surpreend*=2, inesperad*=2
 
 
 # ---------------------------------------------------------------------

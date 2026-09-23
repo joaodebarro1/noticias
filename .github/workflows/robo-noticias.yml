@@ -2,7 +2,7 @@ name: Robo de noticias
 
 on:
   schedule:
-    - cron: "*/30 * * * *"  # a cada 30 min (~1.440 min/mês, dentro dos 2.000 grátis do repo privado)
+    - cron: "*/30 * * * *"  # a cada 30 min (repositório público: minutos ilimitados)
   workflow_dispatch:         # botão "Run workflow" para rodar na mão
     inputs:
       teste:

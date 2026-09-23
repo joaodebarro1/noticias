@@ -25,7 +25,9 @@ import sys
 import time
 import sqlite3
 import hashlib
+import unicodedata
 import urllib.parse
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 
 import feedparser
@@ -47,6 +49,8 @@ OPENAI_MODELO = os.getenv("OPENAI_MODEL") or "gpt-6-luna"
 ARQUIVO_TEMAS = os.getenv("NOTICIAS_TEMAS", os.path.join(os.path.dirname(os.path.abspath(__file__)), "temas.txt"))
 INTERVALO_SEGUNDOS = 60      # de quanto em quanto tempo varre as fontes (modo terminal)
 PONTUACAO_MINIMA = 2         # nota mínima para gerar alerta
+PALAVRAS_MINIMAS = 2         # quantas palavras diferentes precisam aparecer (1 = basta uma)
+MAX_ALERTAS_POR_CICLO = 15   # trava contra enxurrada; o excedente fica para o próximo ciclo
 
 MODO_TESTE = "--teste" in sys.argv
 
@@ -111,6 +115,17 @@ db = sqlite3.connect(ARQUIVO_DB)
 db.execute("""CREATE TABLE IF NOT EXISTS vistas (
     id TEXT PRIMARY KEY, tema TEXT, titulo TEXT, link TEXT, nota INTEGER, visto_em TEXT)""")
 db.commit()
+
+
+db.execute("CREATE TABLE IF NOT EXISTS meta (chave TEXT PRIMARY KEY, valor TEXT)")
+ASSINATURA_TEMAS = hashlib.md5(repr((TEMAS, URGENTES, FEEDS_DIRETOS)).encode()).hexdigest()
+_linha = db.execute("SELECT valor FROM meta WHERE chave='temas'").fetchone()
+temas_mudaram = _linha is None or _linha[0] != ASSINATURA_TEMAS
+
+
+def salvar_assinatura_temas():
+    db.execute("INSERT OR REPLACE INTO meta VALUES ('temas', ?)", (ASSINATURA_TEMAS,))
+    db.commit()
 
 
 def ja_vista(noticia) -> bool:
@@ -195,18 +210,22 @@ def ler_materia(link: str):
 # =========================================================
 
 
+def sem_acento(texto: str) -> str:
+    return "".join(c for c in unicodedata.normalize("NFD", texto) if unicodedata.category(c) != "Mn")
+
+
 def encontrada(palavra: str, texto: str) -> bool:
-    # palavra inteira; com * no fim aceita continuação (inesperad* -> inesperado)
-    if palavra.endswith("*"):
-        padrao = r"(?<!\w)" + re.escape(palavra[:-1])
-    else:
-        padrao = r"(?<!\w)" + re.escape(palavra) + r"(?!\w)"
+    # palavra inteira; * aceita continuação (inesperad* -> inesperado, preço* da gasolina -> preços da gasolina)
+    palavra = sem_acento(palavra)
+    padrao = r"(?<!\w)" + r"\w*".join(re.escape(parte) for parte in palavra.split("*"))
+    if not palavra.endswith("*"):
+        padrao += r"(?!\w)"
     return re.search(padrao, texto) is not None
 
 
 def pontuar(texto: str):
     """-> (assunto principal, nota, tags por assunto) ou None se nenhuma palavra bateu."""
-    t = texto.lower()
+    t = sem_acento(texto.lower())
     tags, notas = {}, {}
     for tema, cfg in TEMAS.items():
         achadas = [p for p in cfg["palavras"] if encontrada(p, t)]
@@ -220,6 +239,14 @@ def pontuar(texto: str):
     if urgentes:
         tags["URGENTE"] = urgentes
     return tema, notas[tema] + sum(URGENTES[p] for p in urgentes), tags
+
+
+def vale_alerta(resultado) -> bool:
+    if not resultado or resultado[1] < PONTUACAO_MINIMA:
+        return False
+    # variações da mesma palavra (combustível/combustíveis, posto/postos) contam uma vez só
+    raizes = {sem_acento(p).replace("*", "")[:6] for ps in resultado[2].values() for p in ps}
+    return len(raizes) >= PALAVRAS_MINIMAS
 
 # =========================================================
 # 5. RESUMO COM IA (OpenAI)
@@ -265,7 +292,7 @@ def sem_marcacao(texto: str) -> str:
     return texto.replace("*", "").replace("_", " ").strip()
 
 
-def montar_mensagem(noticia, nota, tags) -> str:
+def montar_mensagem(tema, noticia, nota, tags) -> str:
     marcador = "🔴" if nota >= 5 else "🟡" if nota >= 3 else "⚪"
     titulo = sem_marcacao(noticia["titulo"])
     partes = [f"{marcador} *{titulo}*"]
@@ -275,8 +302,8 @@ def montar_mensagem(noticia, nota, tags) -> str:
     if noticia.get("resumo_ia"):
         partes.append(f"📝 {noticia['resumo_ia']}")
     partes.append(f"🔗 {noticia['fonte']}\n{noticia['link']}")
-    etiquetas = " · ".join(f"{tema}: {', '.join(p.rstrip('*') for p in ps)}" for tema, ps in tags.items())
-    partes.append(f"🏷️ {etiquetas} (nota {nota})")
+    palavras = list(dict.fromkeys(p.rstrip("*") for ps in tags.values() for p in ps))
+    partes.append(f"🏷️ {tema} · {', '.join(palavras)} (nota {nota})")
     return "\n\n".join(partes)
 
 
@@ -317,7 +344,7 @@ def alertar(tema, noticia, nota, tags, prefixo=""):
 
     marcador = "🔴" if nota >= 5 else "🟡" if nota >= 3 else "⚪"
     print(f"{datetime.now():%H:%M:%S} {marcador} [{tema}] {noticia['titulo']}  ({noticia['fonte']})")
-    msg = prefixo + montar_mensagem(noticia, nota, tags)
+    msg = prefixo + montar_mensagem(tema, noticia, nota, tags)
     if MODO_TESTE:
         print(f"\n----- mensagem -----\n{msg}\n--------------------\n")
     enviar(msg)
@@ -328,14 +355,15 @@ def alertar(tema, noticia, nota, tags, prefixo=""):
 
 
 def coletar():
-    for cfg in TEMAS.values():
-        for termo in cfg["buscas"]:
-            yield from ler_feed(url_google_news(termo))
-    for url in FEEDS_DIRETOS:
-        yield from ler_feed(url)
+    urls = [url_google_news(t) for cfg in TEMAS.values() for t in cfg["buscas"]] + FEEDS_DIRETOS
+    # várias buscas ao mesmo tempo (centenas de buscas em sequência levariam minutos)
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        for noticias in pool.map(lambda u: list(ler_feed(u)), urls):
+            yield from noticias
 
 
 def ciclo(primeira_vez=False):
+    enviados = 0
     for noticia in coletar():
         if not noticia["titulo"] or ja_vista(noticia):
             continue
@@ -343,10 +371,15 @@ def ciclo(primeira_vez=False):
             registrar(noticia, "", 0)
             continue
         resultado = pontuar(noticia["titulo"] + " " + noticia["resumo"])
-        if resultado and resultado[1] >= PONTUACAO_MINIMA:
+        if vale_alerta(resultado):
+            if enviados >= MAX_ALERTAS_POR_CICLO:
+                continue  # não registra: vai no próximo ciclo
             tema, nota, tags = resultado
             registrar(noticia, tema, nota)
             alertar(tema, noticia, nota, tags)
+            enviados += 1
+    if primeira_vez:
+        salvar_assinatura_temas()
 
 
 def teste():
@@ -357,7 +390,7 @@ def teste():
     # manda a primeira notícia real que bater com algum assunto, no formato final
     for noticia in coletar():
         resultado = pontuar(noticia["titulo"] + " " + noticia["resumo"])
-        if resultado:
+        if vale_alerta(resultado):
             tema, nota, tags = resultado
             alertar(tema, noticia, nota, tags, prefixo="🧪 TESTE (notícia real de exemplo)\n\n")
             return
@@ -370,9 +403,11 @@ if __name__ == "__main__":
         sys.exit(0)
 
     if "--uma-vez" in sys.argv:
-        # Modo agendado: um ciclo e sai. Sem histórico salvo, só memoriza (não inunda de alertas).
-        ciclo(primeira_vez=banco_novo)
-        print("Histórico criado." if banco_novo else "Ciclo concluído.")
+        # Modo agendado: um ciclo e sai. Sem histórico salvo, ou com temas.txt alterado,
+        # só memoriza o que já existe (não inunda de alertas).
+        memorizar = banco_novo or temas_mudaram
+        ciclo(primeira_vez=memorizar)
+        print("Histórico criado/atualizado para os assuntos atuais." if memorizar else "Ciclo concluído.")
         sys.exit(0)
 
     print("Robô de notícias iniciado. Carregando histórico...")
