@@ -168,7 +168,8 @@ def alertar(tema, noticia, nota):
                 params={"phone": WHATSAPP_FONE, "text": msg, "apikey": WHATSAPP_APIKEY},
                 timeout=20,
             )
-            if not r.ok or MODO_TESTE:
+            # CallMeBot responde 203 (não 4xx) quando a apikey/número é inválido
+            if r.status_code != 200 or "invalid" in r.text.lower() or MODO_TESTE:
                 print(f"[whatsapp] {r.status_code} {r.text[:300]}")
         except Exception as err:
             print(f"[erro whatsapp] {err}")
