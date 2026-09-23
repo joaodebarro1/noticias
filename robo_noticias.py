@@ -48,8 +48,12 @@ OPENAI_MODELO = os.getenv("OPENAI_MODEL") or "gpt-6-luna"
 
 ARQUIVO_TEMAS = os.getenv("NOTICIAS_TEMAS", os.path.join(os.path.dirname(os.path.abspath(__file__)), "temas.txt"))
 INTERVALO_SEGUNDOS = 1800    # de quanto em quanto tempo varre as fontes (modo terminal)
-PONTUACAO_MINIMA = 2         # nota mínima para gerar alerta
-PALAVRAS_MINIMAS = 2         # quantas palavras diferentes precisam aparecer (1 = basta uma)
+# Regra de envio (explicada no topo do temas.txt): palavra de peso 4 basta sozinha;
+# peso 3 precisa de mais uma palavra diferente; pesos 1 e 2 só reforçam.
+PESO_SOZINHA = 4
+PESO_PRINCIPAL = 3
+NOTA_VERMELHA = 8            # 🔴 nota >= 8
+NOTA_AMARELA = 5             # 🟡 nota >= 5 (abaixo disso ⚪)
 # Cada ciclo manda UMA mensagem com todas as notícias novas (o CallMeBot grátis entrega
 # na hora só 16 mensagens a cada 4 horas). O que não couber fica para o próximo ciclo.
 MAX_CARACTERES_MENSAGEM = 3500
@@ -107,6 +111,10 @@ def carregar_temas(caminho: str):
 
 
 TEMAS, URGENTES, FEEDS_DIRETOS = carregar_temas(ARQUIVO_TEMAS)
+PESOS = {}  # palavra -> maior peso em que aparece no temas.txt
+for _palavras in [c["palavras"] for c in TEMAS.values()] + [URGENTES]:
+    for _p, _peso in _palavras.items():
+        PESOS[_p] = max(PESOS.get(_p, 0), _peso)
 
 # =========================================================
 # 2. BANCO DE DADOS (evita alertas repetidos)
@@ -138,7 +146,7 @@ def ja_vista(noticia) -> bool:
 
 
 def registrar(noticia, tema, nota):
-    db.execute("INSERT OR IGNORE INTO vistas VALUES (?,?,?,?,?,?)",
+    db.execute("INSERT OR REPLACE INTO vistas VALUES (?,?,?,?,?,?)",
                (chave_noticia(noticia["titulo"]), tema, noticia["titulo"], noticia["link"], nota,
                 datetime.now().isoformat()))
     db.commit()
@@ -166,7 +174,7 @@ def texto_limpo(html: str) -> str:
 def ler_feed(url: str):
     try:
         feed = feedparser.parse(url, request_headers=NAVEGADOR)
-        for e in feed.entries[:30]:
+        for e in feed.entries[:100]:  # Google News devolve até 100 por busca
             titulo = e.get("title", "").strip()
             fonte = e.get("source", {}).get("title") or feed.feed.get("title", url)
             bruto = titulo
@@ -237,19 +245,22 @@ def pontuar(texto: str):
             notas[tema] = sum(cfg["palavras"][p] for p in achadas)
     if not notas:
         return None
-    tema = max(notas, key=notas.get)
     urgentes = [p for p in URGENTES if encontrada(p, t)]
     if urgentes:
         tags["URGENTE"] = urgentes
-    return tema, notas[tema] + sum(URGENTES[p] for p in urgentes), tags
+    # nota = soma de todas as palavras encontradas, cada uma contada uma vez
+    nota = sum(PESOS[p] for p in {p for ps in tags.values() for p in ps})
+    return max(notas, key=notas.get), nota, tags
 
 
 def vale_alerta(resultado) -> bool:
-    if not resultado or resultado[1] < PONTUACAO_MINIMA:
+    if not resultado:
         return False
+    palavras = {p for ps in resultado[2].values() for p in ps}
+    maior = max(PESOS[p] for p in palavras)
     # variações da mesma palavra (combustível/combustíveis, posto/postos) contam uma vez só
-    raizes = {sem_acento(p).replace("*", "")[:6] for ps in resultado[2].values() for p in ps}
-    return len(raizes) >= PALAVRAS_MINIMAS
+    raizes = {sem_acento(p).replace("*", "")[:6] for p in palavras}
+    return maior >= PESO_SOZINHA or (maior >= PESO_PRINCIPAL and len(raizes) >= 2)
 
 # =========================================================
 # 5. RESUMO COM IA (OpenAI)
@@ -296,7 +307,7 @@ def sem_marcacao(texto: str) -> str:
 
 
 def marcador(nota: int) -> str:
-    return "🔴" if nota >= 5 else "🟡" if nota >= 3 else "⚪"
+    return "🔴" if nota >= NOTA_VERMELHA else "🟡" if nota >= NOTA_AMARELA else "⚪"
 
 
 def bloco_noticia(item) -> str:
@@ -308,7 +319,7 @@ def bloco_noticia(item) -> str:
     if texto and texto.lower() != titulo.lower():
         linhas.append(texto)
     linhas.append(f"🔗 {item['fonte']} · {item['link']}")
-    palavras = list(dict.fromkeys(p.replace("*", "") for ps in item["tags"].values() for p in ps))
+    palavras = list(dict.fromkeys(p.replace("*", "…") for ps in item["tags"].values() for p in ps))
     outros = f" · +{len(item['outras_fontes'])} sites" if item.get("outras_fontes") else ""
     linhas.append(f"🏷️ {item['tema']} · {', '.join(palavras)}{outros}")
     return "\n".join(linhas)
@@ -401,10 +412,14 @@ def coletar():
 def candidatas(ignorar_historico=False):
     """Notícias novas que passaram no filtro, sem repetidas, das mais importantes para as menos."""
     ja_enviadas = [] if ignorar_historico else enviadas_recentes()
-    escolhidas = []
+    escolhidas, chaves = [], set()
     for noticia in coletar():
         if not noticia["titulo"] or (not ignorar_historico and ja_vista(noticia)):
             continue
+        chave = chave_noticia(noticia["titulo"])
+        if chave in chaves:  # mesmo título vindo de outra busca
+            continue
+        chaves.add(chave)
         resultado = pontuar(noticia["titulo"] + " " + noticia["resumo"])
         if not vale_alerta(resultado):
             continue
