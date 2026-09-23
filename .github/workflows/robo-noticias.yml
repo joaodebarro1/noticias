@@ -6,7 +6,7 @@ on:
   workflow_dispatch:         # botão "Run workflow" para rodar na mão
     inputs:
       teste:
-        description: "Só mandar uma mensagem de teste (Telegram/WhatsApp)"
+        description: "Só mandar uma notícia de teste (Telegram/WhatsApp/OpenAI)"
         type: boolean
         default: false
 
@@ -45,6 +45,8 @@ jobs:
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           WHATSAPP_FONE: ${{ secrets.WHATSAPP_FONE }}
           WHATSAPP_APIKEY: ${{ secrets.WHATSAPP_APIKEY }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          OPENAI_MODEL: ${{ vars.OPENAI_MODEL }}
 
       - name: Salvar histórico
         if: always() && !inputs.teste

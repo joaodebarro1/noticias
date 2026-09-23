@@ -1,0 +1,46 @@
+# =====================================================================
+#  ASSUNTOS DO ROBÔ DE NOTÍCIAS
+#  Edite à vontade (dá para editar direto no site do GitHub, no lápis ✏️).
+#  Linhas começando com # são ignoradas.
+#
+#  Cada assunto começa com o nome entre colchetes:  [NOME DO ASSUNTO]
+#
+#    buscar:    o que pesquisar no Google News, separado por ;
+#    palavras:  palavra=peso, separadas por vírgula
+#               peso = importância (1 fraco, 2 médio, 3 forte)
+#               a palavra precisa aparecer inteira no título/trecho;
+#               termine com * para aceitar variações: inesperad* -> inesperado, inesperada
+#
+#  A soma dos pesos das palavras encontradas é a nota da notícia:
+#    🔴 nota 5 ou mais    🟡 nota 3 a 4    ⚪ nota 2    (abaixo de 2 não é enviada)
+#
+#  Seções especiais:
+#    [URGENTES]  palavras que somam pontos em qualquer assunto
+#    [FONTES]    sites (links RSS) lidos em todo ciclo, um por linha
+# =====================================================================
+
+[JUROS / BC]
+buscar:   Copom Selic; Banco Central juros; Federal Reserve rates
+palavras: selic=3, copom=3, fed=2, juros=2, inflação=2, ipca=2
+
+[PETRÓLEO]
+buscar:   petróleo Brent; Petrobras; OPEP
+palavras: brent=3, petrobras=3, opep=3, opec=3, petróleo=2
+
+[CÂMBIO]
+buscar:   dólar real câmbio
+palavras: dólar=2, câmbio=2, real=1
+
+# --- Exemplo de novo assunto (apague o # do começo das 3 linhas para ativar) ---
+# [BOLSA]
+# buscar:   Ibovespa; B3 ações
+# palavras: ibovespa=3, b3=2, ações=1, balanço=2, lucro=2, dividendos=2
+
+
+[URGENTES]
+palavras: urgente=3, breaking=3, exclusivo=2, surpreend*=2, inesperad*=2
+
+[FONTES]
+https://www.infomoney.com.br/feed/
+https://g1.globo.com/rss/g1/economia/
+https://feeds.bbci.co.uk/news/business/rss.xml
