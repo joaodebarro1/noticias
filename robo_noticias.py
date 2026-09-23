@@ -322,17 +322,26 @@ def enviar(msg: str):
             print(f"[erro telegram] {err}")
 
     if WHATSAPP_FONE and WHATSAPP_APIKEY:
-        try:
-            r = requests.get(
-                "https://api.callmebot.com/whatsapp.php",
-                params={"phone": WHATSAPP_FONE, "text": msg, "apikey": WHATSAPP_APIKEY},
-                timeout=20,
-            )
-            # CallMeBot responde 203 (não 4xx) quando a apikey/número é inválido
-            if r.status_code != 200 or "invalid" in r.text.lower() or MODO_TESTE:
-                print(f"[whatsapp] {r.status_code} {r.text[:300]}")
-        except Exception as err:
-            print(f"[erro whatsapp] {err}")
+        for tentativa in (1, 2):
+            try:
+                r = requests.get(
+                    "https://api.callmebot.com/whatsapp.php",
+                    params={"phone": WHATSAPP_FONE, "text": msg, "apikey": WHATSAPP_APIKEY},
+                    timeout=30,
+                )
+                # a resposta repete a mensagem inteira; tira essa parte e o número para sobrar só o status
+                status = re.sub(r"<p>Text to send:.*?(?=<p|$)|<p>Message to:[^<]*", "", r.text, flags=re.S)
+                status = texto_limpo(status)[:300]
+                # CallMeBot responde 2xx diferente de 200 (203, 210...) quando não enviou
+                ok = r.status_code == 200 and "invalid" not in status.lower()
+                if not ok or MODO_TESTE:
+                    print(f"[whatsapp] tentativa {tentativa}: {r.status_code} {status}")
+                if ok:
+                    break
+            except Exception as err:
+                print(f"[erro whatsapp] tentativa {tentativa}: {err}")
+            time.sleep(30)  # espera antes de tentar de novo
+        time.sleep(3)  # intervalo entre mensagens para não sobrecarregar o CallMeBot
 
 
 def alertar(tema, noticia, nota, tags, prefixo=""):
