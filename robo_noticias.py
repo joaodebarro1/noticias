@@ -28,7 +28,7 @@ import hashlib
 import unicodedata
 import urllib.parse
 from concurrent.futures import ThreadPoolExecutor
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 
 import feedparser
 import requests
@@ -47,10 +47,13 @@ OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
 OPENAI_MODELO = os.getenv("OPENAI_MODEL") or "gpt-6-luna"
 
 ARQUIVO_TEMAS = os.getenv("NOTICIAS_TEMAS", os.path.join(os.path.dirname(os.path.abspath(__file__)), "temas.txt"))
-INTERVALO_SEGUNDOS = 60      # de quanto em quanto tempo varre as fontes (modo terminal)
+INTERVALO_SEGUNDOS = 1800    # de quanto em quanto tempo varre as fontes (modo terminal)
 PONTUACAO_MINIMA = 2         # nota mínima para gerar alerta
 PALAVRAS_MINIMAS = 2         # quantas palavras diferentes precisam aparecer (1 = basta uma)
-MAX_ALERTAS_POR_CICLO = 15   # trava contra enxurrada; o excedente fica para o próximo ciclo
+# Cada ciclo manda UMA mensagem com todas as notícias novas (o CallMeBot grátis entrega
+# na hora só 16 mensagens a cada 4 horas). O que não couber fica para o próximo ciclo.
+MAX_CARACTERES_MENSAGEM = 3500
+HORARIO_BRASIL = timezone(timedelta(hours=-3))
 
 MODO_TESTE = "--teste" in sys.argv
 
@@ -254,7 +257,7 @@ def vale_alerta(resultado) -> bool:
 
 INSTRUCOES_RESUMO = (
     "Você resume notícias para alertas de WhatsApp de um investidor brasileiro. "
-    "Escreva em português do Brasil, em 2 ou 3 frases curtas (no máximo 350 caracteres), "
+    "Escreva em português do Brasil, em 1 ou 2 frases curtas (no máximo 220 caracteres), "
     "usando apenas fatos presentes no texto e destacando números relevantes. "
     "Não repita o título. Não use markdown, emojis nem aspas."
 )
@@ -292,19 +295,29 @@ def sem_marcacao(texto: str) -> str:
     return texto.replace("*", "").replace("_", " ").strip()
 
 
-def montar_mensagem(tema, noticia, nota, tags) -> str:
-    marcador = "🔴" if nota >= 5 else "🟡" if nota >= 3 else "⚪"
-    titulo = sem_marcacao(noticia["titulo"])
-    partes = [f"{marcador} *{titulo}*"]
-    subtitulo = sem_marcacao(noticia.get("subtitulo", ""))
-    if subtitulo and subtitulo.lower() != titulo.lower():
-        partes[0] += f"\n_{subtitulo[:300]}_"
-    if noticia.get("resumo_ia"):
-        partes.append(f"📝 {noticia['resumo_ia']}")
-    partes.append(f"🔗 {noticia['fonte']}\n{noticia['link']}")
-    palavras = list(dict.fromkeys(p.rstrip("*") for ps in tags.values() for p in ps))
-    partes.append(f"🏷️ {tema} · {', '.join(palavras)} (nota {nota})")
-    return "\n\n".join(partes)
+def marcador(nota: int) -> str:
+    return "🔴" if nota >= 5 else "🟡" if nota >= 3 else "⚪"
+
+
+def bloco_noticia(item) -> str:
+    """Uma notícia dentro da mensagem agrupada."""
+    titulo = sem_marcacao(item["titulo"])
+    linhas = [f"{marcador(item['nota'])} *{titulo}*"]
+    # o resumo da IA substitui o subtítulo para a mensagem não ficar enorme
+    texto = item.get("resumo_ia") or sem_marcacao(item.get("subtitulo", ""))[:220]
+    if texto and texto.lower() != titulo.lower():
+        linhas.append(texto)
+    linhas.append(f"🔗 {item['fonte']} · {item['link']}")
+    palavras = list(dict.fromkeys(p.replace("*", "") for ps in item["tags"].values() for p in ps))
+    outros = f" · +{len(item['outras_fontes'])} sites" if item.get("outras_fontes") else ""
+    linhas.append(f"🏷️ {item['tema']} · {', '.join(palavras)}{outros}")
+    return "\n".join(linhas)
+
+
+def cabecalho(itens, prefixo="") -> str:
+    contagem = "  ".join(f"{m} {sum(marcador(i['nota']) == m for i in itens)}" for m in ("🔴", "🟡", "⚪")
+                         if any(marcador(i["nota"]) == m for i in itens))
+    return f"{prefixo}📰 *Radar de notícias* · {datetime.now(HORARIO_BRASIL):%d/%m %H:%M}\n{contagem}"
 
 
 def enviar(msg: str):
@@ -322,44 +335,58 @@ def enviar(msg: str):
             print(f"[erro telegram] {err}")
 
     if WHATSAPP_FONE and WHATSAPP_APIKEY:
-        for tentativa in (1, 2):
-            try:
-                r = requests.get(
-                    "https://api.callmebot.com/whatsapp.php",
-                    params={"phone": WHATSAPP_FONE, "text": msg, "apikey": WHATSAPP_APIKEY},
-                    timeout=30,
-                )
-                # a resposta repete a mensagem inteira; tira essa parte e o número para sobrar só o status
-                status = re.sub(r"<p>Text to send:.*?(?=<p|$)|<p>Message to:[^<]*", "", r.text, flags=re.S)
-                status = texto_limpo(status)[:300]
-                # CallMeBot responde 2xx diferente de 200 (203, 210...) quando não enviou
-                ok = r.status_code == 200 and "invalid" not in status.lower()
-                if not ok or MODO_TESTE:
-                    print(f"[whatsapp] tentativa {tentativa}: {r.status_code} {status}")
-                if ok:
-                    break
-            except Exception as err:
-                print(f"[erro whatsapp] tentativa {tentativa}: {err}")
-            time.sleep(30)  # espera antes de tentar de novo
-        time.sleep(3)  # intervalo entre mensagens para não sobrecarregar o CallMeBot
+        try:
+            r = requests.get(
+                "https://api.callmebot.com/whatsapp.php",
+                params={"phone": WHATSAPP_FONE, "text": msg, "apikey": WHATSAPP_APIKEY},
+                timeout=30,
+            )
+            # a resposta repete a mensagem inteira; tira essa parte e o número para sobrar só o status
+            status = re.sub(r"<p>Text to send:.*?(?=<p|$)|<p>Message to:[^<]*", "", r.text, flags=re.S)
+            status = texto_limpo(status)[:300]
+            # 200 = enviada; 210 = passou de 16 mensagens em 4h e entrou na fila do CallMeBot;
+            # outros códigos (ex.: 203 com "APIKey is invalid") = não enviada
+            if r.status_code != 200 or "invalid" in status.lower() or MODO_TESTE:
+                print(f"[whatsapp] {r.status_code} {status}")
+        except Exception as err:
+            print(f"[erro whatsapp] {err}")
 
 
-def alertar(tema, noticia, nota, tags, prefixo=""):
-    # só as notícias que vão ser enviadas passam por aqui: abre a matéria e resume
-    noticia["link"] = link_real(noticia["link"])
-    subtitulo, texto = ler_materia(noticia["link"])
-    noticia["subtitulo"] = subtitulo or noticia["resumo"]
-    noticia["resumo_ia"] = resumir(noticia["titulo"], noticia["subtitulo"], texto or noticia["resumo"])
-
-    marcador = "🔴" if nota >= 5 else "🟡" if nota >= 3 else "⚪"
-    print(f"{datetime.now():%H:%M:%S} {marcador} [{tema}] {noticia['titulo']}  ({noticia['fonte']})")
-    msg = prefixo + montar_mensagem(tema, noticia, nota, tags)
-    if MODO_TESTE:
-        print(f"\n----- mensagem -----\n{msg}\n--------------------\n")
-    enviar(msg)
+def completar(item):
+    """Só para as notícias que vão ser enviadas: link real, subtítulo e resumo da IA."""
+    item["link"] = link_real(item["link"])
+    subtitulo, texto = ler_materia(item["link"])
+    item["subtitulo"] = subtitulo or item["resumo"]
+    item["resumo_ia"] = resumir(item["titulo"], item["subtitulo"], texto or item["resumo"])
+    print(f"{datetime.now():%H:%M:%S} {marcador(item['nota'])} [{item['tema']}] {item['titulo']}  ({item['fonte']})")
 
 # =========================================================
-# 7. CICLO PRINCIPAL
+# 7. NOTÍCIAS PARECIDAS (mesmo fato publicado por vários sites)
+# =========================================================
+
+PALAVRAS_VAZIAS = set("""de da do das dos em no na nos nas um uma uns umas para por pelo pela pelos pelas com sem
+sobre entre ate apos que se ao aos as os e o a ou mas mais menos muito ja nao sim seu sua seus suas diz dizem veja
+entenda confira contra desde the and for with from its are was has have will""".split())
+
+
+def assinatura(titulo: str) -> set:
+    palavras = re.findall(r"\w+", sem_acento(titulo.lower()))
+    return {p[:5] for p in palavras if len(p) >= 3 and p not in PALAVRAS_VAZIAS}
+
+
+def parecida(a: set, b: set) -> bool:
+    # calibrado com notícias reais: >= 4 palavras em comum e >= 60% do título menor
+    comum = len(a & b)
+    return comum >= 4 and comum / min(len(a), len(b)) >= 0.6
+
+
+def enviadas_recentes():
+    desde = (datetime.now() - timedelta(hours=24)).isoformat()
+    return [assinatura(t) for (t,) in db.execute(
+        "SELECT titulo FROM vistas WHERE nota > 0 AND visto_em >= ?", (desde,))]
+
+# =========================================================
+# 8. CICLO PRINCIPAL
 # =========================================================
 
 
@@ -371,39 +398,79 @@ def coletar():
             yield from noticias
 
 
-def ciclo(primeira_vez=False):
-    enviados = 0
+def candidatas(ignorar_historico=False):
+    """Notícias novas que passaram no filtro, sem repetidas, das mais importantes para as menos."""
+    ja_enviadas = [] if ignorar_historico else enviadas_recentes()
+    escolhidas = []
     for noticia in coletar():
-        if not noticia["titulo"] or ja_vista(noticia):
-            continue
-        if primeira_vez:  # na 1ª rodada só memoriza, sem inundar de alertas
-            registrar(noticia, "", 0)
+        if not noticia["titulo"] or (not ignorar_historico and ja_vista(noticia)):
             continue
         resultado = pontuar(noticia["titulo"] + " " + noticia["resumo"])
-        if vale_alerta(resultado):
-            if enviados >= MAX_ALERTAS_POR_CICLO:
-                continue  # não registra: vai no próximo ciclo
-            tema, nota, tags = resultado
-            registrar(noticia, tema, nota)
-            alertar(tema, noticia, nota, tags)
-            enviados += 1
-    if primeira_vez:
+        if not vale_alerta(resultado):
+            continue
+        noticia["tema"], noticia["nota"], noticia["tags"] = resultado
+        sig = assinatura(noticia["titulo"])
+        igual = next((e for e in escolhidas if parecida(sig, e["assinatura"])), None)
+        if igual:  # mesma notícia de outro site neste ciclo
+            if noticia["fonte"] != igual["fonte"]:
+                igual["outras_fontes"].add(noticia["fonte"])
+            if not ignorar_historico:
+                registrar(noticia, "PARECIDA", -1)
+            continue
+        if any(parecida(sig, e) for e in ja_enviadas):  # já foi enviada nas últimas 24h
+            if not ignorar_historico:
+                registrar(noticia, "PARECIDA", -1)
+            continue
+        noticia["assinatura"], noticia["outras_fontes"] = sig, set()
+        escolhidas.append(noticia)
+    return sorted(escolhidas, key=lambda n: -n["nota"])
+
+
+def montar_e_enviar(escolhidas, prefixo="", registrar_enviadas=True):
+    """Monta UMA mensagem com o que couber; o resto fica para o próximo ciclo."""
+    incluidas, blocos = [], []
+    for item in escolhidas:
+        completar(item)
+        bloco = bloco_noticia(item)
+        tamanho = len(cabecalho(incluidas + [item], prefixo)) + sum(len(b) + 2 for b in blocos + [bloco])
+        if incluidas and tamanho > MAX_CARACTERES_MENSAGEM:
+            break
+        incluidas.append(item)
+        blocos.append(bloco)
+    if not incluidas:
+        return 0
+    msg = cabecalho(incluidas, prefixo) + "\n\n" + "\n\n".join(blocos)
+    if MODO_TESTE:
+        print(f"\n----- mensagem ({len(msg)} caracteres) -----\n{msg}\n--------------------\n")
+    enviar(msg)
+    if registrar_enviadas:
+        for item in incluidas:
+            registrar(item, item["tema"], item["nota"])
+    return len(incluidas)
+
+
+def ciclo(primeira_vez=False):
+    if primeira_vez:  # na 1ª rodada só memoriza, sem inundar de alertas
+        for noticia in coletar():
+            if noticia["titulo"] and not ja_vista(noticia):
+                registrar(noticia, "", 0)
         salvar_assinatura_temas()
+        return
+    escolhidas = candidatas()
+    enviadas = montar_e_enviar(escolhidas)
+    print(f"{len(escolhidas)} notícias novas; {enviadas} enviadas"
+          + (f"; {len(escolhidas) - enviadas} ficaram para o próximo ciclo" if len(escolhidas) > enviadas else ""))
 
 
 def teste():
     print("Telegram:", "configurado" if TELEGRAM_TOKEN and TELEGRAM_CHAT_ID else "NÃO configurado")
     print("WhatsApp:", "configurado" if WHATSAPP_FONE and WHATSAPP_APIKEY else "NÃO configurado")
     print("OpenAI:  ", f"configurado ({OPENAI_MODELO})" if OPENAI_API_KEY else "NÃO configurado (sem resumo)")
-    print(f"Assuntos: {', '.join(TEMAS)} | fontes diretas: {len(FEEDS_DIRETOS)}")
-    # manda a primeira notícia real que bater com algum assunto, no formato final
-    for noticia in coletar():
-        resultado = pontuar(noticia["titulo"] + " " + noticia["resumo"])
-        if vale_alerta(resultado):
-            tema, nota, tags = resultado
-            alertar(tema, noticia, nota, tags, prefixo="🧪 TESTE (notícia real de exemplo)\n\n")
-            return
-    print("Nenhuma notícia bateu com as palavras de temas.txt agora.")
+    print(f"Assuntos: {len(TEMAS)} | fontes diretas: {len(FEEDS_DIRETOS)}")
+    # manda as 3 notícias reais mais fortes do momento, no formato final (sem mexer no histórico)
+    escolhidas = candidatas(ignorar_historico=True)[:3]
+    if not montar_e_enviar(escolhidas, prefixo="🧪 TESTE\n", registrar_enviadas=False):
+        print("Nenhuma notícia bateu com as palavras de temas.txt agora.")
 
 
 if __name__ == "__main__":
