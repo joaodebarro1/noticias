@@ -55,9 +55,15 @@ PESO_SOZINHA = 4
 PESO_PRINCIPAL = 3
 NOTA_VERMELHA = 8            # 🔴 nota >= 8
 NOTA_AMARELA = 5             # 🟡 nota >= 5 (abaixo disso ⚪)
-# Cada ciclo manda UMA mensagem com todas as notícias novas (o CallMeBot grátis entrega
-# na hora só 16 mensagens a cada 4 horas). O que não couber fica para o próximo ciclo.
-MAX_CARACTERES_MENSAGEM = 3500
+# Telegram: recebe todas as notícias do ciclo no formato completo (o Telegram aceita até 4096
+# caracteres por mensagem; textos maiores são divididos em várias mensagens).
+LIMITE_TELEGRAM = 4000
+MAX_NOTICIAS_POR_CICLO = 40  # as mais fortes; o resto do ciclo é descartado (evita fila infinita)
+# WhatsApp (CallMeBot grátis): só as 🔴, em versão curta. Medido com a régua: corta o texto em
+# 768 caracteres (cada quebra de linha conta 3) e entrega na hora só 16 mensagens a cada 4 horas.
+LIMITE_WHATSAPP = 740
+WHATSAPP_POR_4H = 16
+WHATSAPP_POR_CICLO = 2
 HORARIO_BRASIL = timezone(timedelta(hours=-3))
 
 MODO_TESTE = "--teste" in sys.argv
@@ -153,6 +159,7 @@ db.commit()
 
 
 db.execute("CREATE TABLE IF NOT EXISTS meta (chave TEXT PRIMARY KEY, valor TEXT)")
+db.execute("CREATE TABLE IF NOT EXISTS envios (canal TEXT, quando TEXT)")  # para a cota do WhatsApp
 ASSINATURA_TEMAS = hashlib.md5(repr((TEMAS, URGENTES, IGNORAR, FONTES)).encode()).hexdigest()
 _linha = db.execute("SELECT valor FROM meta WHERE chave='temas'").fetchone()
 temas_mudaram = _linha is None or _linha[0] != ASSINATURA_TEMAS
@@ -328,8 +335,8 @@ def vale_alerta(resultado) -> bool:
 # =========================================================
 
 INSTRUCOES_RESUMO = (
-    "Você resume notícias para alertas de WhatsApp de um investidor brasileiro. "
-    "Escreva em português do Brasil, em 1 ou 2 frases curtas (no máximo 220 caracteres), "
+    "Você resume notícias para alertas de um investidor brasileiro. "
+    "Escreva em português do Brasil, em 2 ou 3 frases curtas (no máximo 350 caracteres), "
     "usando apenas fatos presentes no texto e destacando números relevantes. "
     "Não repita o título. Não use markdown, emojis nem aspas."
 )
@@ -376,7 +383,7 @@ def bloco_noticia(item) -> str:
     titulo = sem_marcacao(item["titulo"])
     linhas = [f"{marcador(item['nota'])} *{titulo}*"]
     # o resumo da IA substitui o subtítulo para a mensagem não ficar enorme
-    texto = item.get("resumo_ia") or sem_marcacao(item.get("subtitulo", ""))[:220]
+    texto = item.get("resumo_ia") or sem_marcacao(item.get("subtitulo", ""))[:350]
     if texto and texto.lower() != titulo.lower():
         linhas.append(texto)
     linhas.append(f"🔗 {item['fonte']} · {item['link']}")
@@ -386,50 +393,111 @@ def bloco_noticia(item) -> str:
     return "\n".join(linhas)
 
 
-def cabecalho(itens, prefixo="") -> str:
+def cabecalho(itens, prefixo="", parte=1, partes=1) -> str:
     contagem = "  ".join(f"{m} {sum(marcador(i['nota']) == m for i in itens)}" for m in ("🔴", "🟡", "⚪")
                          if any(marcador(i["nota"]) == m for i in itens))
-    return f"{prefixo}📰 *Radar de notícias* · {datetime.now(HORARIO_BRASIL):%d/%m %H:%M}\n{contagem}"
+    numero = f" · {parte}/{partes}" if partes > 1 else ""
+    return f"{prefixo}📰 *Radar de notícias* · {datetime.now(HORARIO_BRASIL):%d/%m %H:%M}{numero}\n{contagem}"
+
+
+def bloco_curto(item) -> str:
+    """Versão curta para o WhatsApp: título e link encurtado."""
+    titulo = sem_marcacao(item["titulo"])
+    if len(titulo) > 90:
+        titulo = titulo[:87].rstrip() + "…"
+    outros = f" · +{len(item['outras_fontes'])} sites" if item.get("outras_fontes") else ""
+    return f"{marcador(item['nota'])} {titulo}\n   {item.get('link_curto') or item['link']}{outros}"
+
+
+def tamanho_whatsapp(texto: str) -> int:
+    # o CallMeBot conta cada quebra de linha como 3 caracteres (%0A)
+    return len(texto) + 2 * texto.count("\n")
+
+
+def agrupar(blocos, cabeca, limite, medir=len, separador="\n\n"):
+    """Divide os blocos em grupos que caibam no limite, com o cabeçalho em cada mensagem."""
+    grupos = [[]]
+    for bloco in blocos:
+        tentativa = cabeca(9, 9) + separador + separador.join(grupos[-1] + [bloco])
+        if grupos[-1] and medir(tentativa) > limite:
+            grupos.append([])
+        grupos[-1].append(bloco)
+    return grupos
+
+
+def encurtar(link: str) -> str:
+    try:
+        r = requests.get("https://tinyurl.com/api-create.php", params={"url": link}, timeout=10)
+        if r.ok and r.text.startswith("http"):
+            return r.text.strip().replace("https://", "")
+    except Exception as err:
+        print(f"[erro encurtar] {err}")
+    return link
+
+
+def registrar_envio(canal: str):
+    db.execute("INSERT INTO envios VALUES (?, ?)", (canal, datetime.now().isoformat()))
+    db.commit()
+
+
+def cota_whatsapp() -> int:
+    """Quantas mensagens de WhatsApp ainda podem sair agora sem cair na fila do CallMeBot."""
+    desde = (datetime.now() - timedelta(hours=4)).isoformat()
+    usadas = db.execute("SELECT COUNT(*) FROM envios WHERE canal='whatsapp' AND quando >= ?",
+                        (desde,)).fetchone()[0]
+    return max(0, min(WHATSAPP_POR_CICLO, WHATSAPP_POR_4H - usadas))
+
+
+def enviar_telegram(msg: str):
+    try:
+        dados = {"chat_id": TELEGRAM_CHAT_ID, "text": msg, "disable_web_page_preview": True}
+        r = requests.post(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage",
+                          data={**dados, "parse_mode": "Markdown"}, timeout=15)
+        if not r.ok:  # ex.: "_" dentro do link quebra o Markdown -> reenvia sem formatação
+            r = requests.post(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage",
+                              data=dados, timeout=15)
+        if not r.ok or MODO_TESTE:
+            print(f"[telegram] {r.status_code} {r.text[:300]}")
+    except Exception as err:
+        print(f"[erro telegram] {err}")
+
+
+def enviar_whatsapp(msg: str):
+    try:
+        r = requests.get(
+            "https://api.callmebot.com/whatsapp.php",
+            params={"phone": WHATSAPP_FONE, "text": msg, "apikey": WHATSAPP_APIKEY},
+            timeout=30,
+        )
+        registrar_envio("whatsapp")
+        # a resposta repete a mensagem inteira; tira essa parte e o número para sobrar só o status
+        status = re.sub(r"<p>Text to send:.*?(?=<p|$)|<p>Message to:[^<]*", "", r.text, flags=re.S)
+        status = texto_limpo(status)[:300]
+        # 200 = enviada; 210 = passou de 16 mensagens em 4h e entrou na fila do CallMeBot;
+        # outros códigos (ex.: 203 com "APIKey is invalid") = não enviada
+        if r.status_code != 200 or "invalid" in status.lower() or MODO_TESTE:
+            print(f"[whatsapp] {r.status_code} {status}")
+    except Exception as err:
+        print(f"[erro whatsapp] {err}")
 
 
 def enviar(msg: str):
     if TELEGRAM_TOKEN and TELEGRAM_CHAT_ID:
-        try:
-            dados = {"chat_id": TELEGRAM_CHAT_ID, "text": msg, "disable_web_page_preview": True}
-            r = requests.post(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage",
-                              data={**dados, "parse_mode": "Markdown"}, timeout=10)
-            if not r.ok:  # ex.: "_" dentro do link quebra o Markdown -> reenvia sem formatação
-                r = requests.post(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage",
-                                  data=dados, timeout=10)
-            if not r.ok or MODO_TESTE:
-                print(f"[telegram] {r.status_code} {r.text[:300]}")
-        except Exception as err:
-            print(f"[erro telegram] {err}")
-
+        enviar_telegram(msg)
     if WHATSAPP_FONE and WHATSAPP_APIKEY:
-        try:
-            r = requests.get(
-                "https://api.callmebot.com/whatsapp.php",
-                params={"phone": WHATSAPP_FONE, "text": msg, "apikey": WHATSAPP_APIKEY},
-                timeout=30,
-            )
-            # a resposta repete a mensagem inteira; tira essa parte e o número para sobrar só o status
-            status = re.sub(r"<p>Text to send:.*?(?=<p|$)|<p>Message to:[^<]*", "", r.text, flags=re.S)
-            status = texto_limpo(status)[:300]
-            # 200 = enviada; 210 = passou de 16 mensagens em 4h e entrou na fila do CallMeBot;
-            # outros códigos (ex.: 203 com "APIKey is invalid") = não enviada
-            if r.status_code != 200 or "invalid" in status.lower() or MODO_TESTE:
-                print(f"[whatsapp] {r.status_code} {status}")
-        except Exception as err:
-            print(f"[erro whatsapp] {err}")
+        enviar_whatsapp(msg)
 
 
-def completar(item):
-    """Só para as notícias que vão ser enviadas: link real, subtítulo e resumo da IA."""
+def completar(item, completo=True, curto=False):
+    """Só para as notícias que vão ser enviadas: link real e, conforme o canal,
+    subtítulo + resumo da IA (Telegram) e link encurtado (WhatsApp)."""
     item["link"] = link_real(item["link"])
-    subtitulo, texto = ler_materia(item["link"])
-    item["subtitulo"] = subtitulo or item["resumo"]
-    item["resumo_ia"] = resumir(item["titulo"], item["subtitulo"], texto or item["resumo"])
+    if completo:
+        subtitulo, texto = ler_materia(item["link"])
+        item["subtitulo"] = subtitulo or item["resumo"]
+        item["resumo_ia"] = resumir(item["titulo"], item["subtitulo"], texto or item["resumo"])
+    if curto:
+        item["link_curto"] = encurtar(item["link"])
     print(f"{datetime.now():%H:%M:%S} {marcador(item['nota'])} [{item['tema']}] {item['titulo']}  ({item['fonte']})")
 
 # =========================================================
@@ -505,26 +573,53 @@ def candidatas(ignorar_historico=False):
 
 
 def montar_e_enviar(escolhidas, prefixo="", registrar_enviadas=True):
-    """Monta UMA mensagem com o que couber; o resto fica para o próximo ciclo."""
-    incluidas, blocos = [], []
-    for item in escolhidas:
-        completar(item)
-        bloco = bloco_noticia(item)
-        tamanho = len(cabecalho(incluidas + [item], prefixo)) + sum(len(b) + 2 for b in blocos + [bloco])
-        if incluidas and tamanho > MAX_CARACTERES_MENSAGEM:
-            break
-        incluidas.append(item)
-        blocos.append(bloco)
-    if not incluidas:
+    """Telegram: todas, formato completo. WhatsApp: só as 🔴, versão curta, dentro da cota."""
+    tem_telegram = bool(TELEGRAM_TOKEN and TELEGRAM_CHAT_ID)
+    tem_whatsapp = bool(WHATSAPP_FONE and WHATSAPP_APIKEY)
+    vermelhas = [i for i in escolhidas if marcador(i["nota"]) == "🔴"] if tem_whatsapp else []
+    ids_vermelhas = {id(i) for i in vermelhas}
+    alvo = escolhidas if tem_telegram else vermelhas
+    if not alvo:
         return 0
-    msg = cabecalho(incluidas, prefixo) + "\n\n" + "\n\n".join(blocos)
-    if MODO_TESTE:
-        print(f"\n----- mensagem ({len(msg)} caracteres) -----\n{msg}\n--------------------\n")
-    enviar(msg)
+
+    # abre as matérias em paralelo (link real, resumo da IA, link curto)
+    with ThreadPoolExecutor(max_workers=6) as pool:
+        list(pool.map(lambda i: completar(i, completo=tem_telegram, curto=id(i) in ids_vermelhas), alvo))
+
+    if tem_telegram:
+        blocos = [bloco_noticia(i) for i in escolhidas]
+        grupos = agrupar(blocos, lambda n, t: cabecalho(escolhidas, prefixo, n, t), LIMITE_TELEGRAM)
+        for n, grupo in enumerate(grupos, 1):
+            msg = cabecalho(escolhidas, prefixo, n, len(grupos)) + "\n\n" + "\n\n".join(grupo)
+            if MODO_TESTE:
+                print(f"\n----- Telegram {n}/{len(grupos)} ({len(msg)} caracteres) -----\n{msg}\n")
+            enviar_telegram(msg)
+            time.sleep(1)
+
+    if vermelhas:
+        cabeca = lambda n, t: (f"{prefixo}📰 *Radar* · {datetime.now(HORARIO_BRASIL):%d/%m %H:%M}"
+                               + (f" · {n}/{t}" if t > 1 else ""))
+        grupos = agrupar([bloco_curto(i) for i in vermelhas], cabeca, LIMITE_WHATSAPP, tamanho_whatsapp, "\n")
+        cota = cota_whatsapp()
+        enviados = grupos[:cota]
+        sobra = len(vermelhas) - sum(len(g) for g in enviados)
+        if not enviados:
+            print(f"[whatsapp] cota de {WHATSAPP_POR_4H} mensagens em 4h esgotada; {len(vermelhas)} 🔴 ficaram só"
+                  + (" no Telegram" if tem_telegram else " de fora"))
+        for n, grupo in enumerate(enviados, 1):
+            msg = cabeca(n, len(enviados)) + "\n" + "\n".join(grupo)
+            aviso = f"\n+{sobra} 🔴 " + ("no Telegram" if tem_telegram else "não couberam")
+            if n == len(enviados) and sobra and tamanho_whatsapp(msg + aviso) <= LIMITE_WHATSAPP:
+                msg += aviso
+            if MODO_TESTE:
+                print(f"\n----- WhatsApp {n}/{len(enviados)} ({tamanho_whatsapp(msg)} de {LIMITE_WHATSAPP}) -----\n{msg}\n")
+            enviar_whatsapp(msg)
+            time.sleep(3)
+
     if registrar_enviadas:
-        for item in incluidas:
+        for item in escolhidas:
             registrar(item, item["tema"], item["nota"])
-    return len(incluidas)
+    return len(alvo)
 
 
 def ciclo(primeira_vez=False):
@@ -535,9 +630,12 @@ def ciclo(primeira_vez=False):
         salvar_assinatura_temas()
         return
     escolhidas = candidatas()
-    enviadas = montar_e_enviar(escolhidas)
+    descartadas = escolhidas[MAX_NOTICIAS_POR_CICLO:]
+    for item in descartadas:  # as mais fracas de um ciclo muito cheio não voltam no próximo
+        registrar(item, "DESCARTADA", 0)
+    enviadas = montar_e_enviar(escolhidas[:MAX_NOTICIAS_POR_CICLO])
     print(f"{len(escolhidas)} notícias novas; {enviadas} enviadas"
-          + (f"; {len(escolhidas) - enviadas} ficaram para o próximo ciclo" if len(escolhidas) > enviadas else ""))
+          + (f"; {len(descartadas)} mais fracas descartadas" if descartadas else ""))
 
 
 def teste():
