@@ -26,6 +26,7 @@ import sys
 import time
 import sqlite3
 import hashlib
+import json
 import unicodedata
 import urllib.parse
 from concurrent.futures import ThreadPoolExecutor
@@ -336,34 +337,63 @@ def vale_alerta(resultado) -> bool:
 # =========================================================
 
 INSTRUCOES_RESUMO = (
-    "Você resume notícias para alertas de um investidor brasileiro. "
-    "Escreva em português do Brasil, em 2 ou 3 frases curtas (no máximo 350 caracteres), "
-    "usando apenas fatos presentes no texto e destacando números relevantes. "
-    "Não repita o título. Não use markdown, emojis nem aspas."
+    "Você lê notícias para alertas de um investidor brasileiro e responde com dois campos. "
+    "pais: BRASIL se a notícia trata do Brasil, de empresas brasileiras (ex.: Petrobras, Vibra, Raízen) "
+    "ou do mercado brasileiro, mesmo que o fato aconteça fora; senão, o país onde os fatos acontecem, "
+    "em português e em maiúsculas (ex.: PORTUGAL, ESTADOS UNIDOS, VIETNÃ), ou o bloco/região se não houver "
+    "um país só (ex.: UNIÃO EUROPEIA, ORIENTE MÉDIO); INTERNACIONAL para mercado "
+    "global sem um país específico (ex.: cotação do Brent, decisões da OPEP). "
+    "resumo: em português do Brasil, 2 ou 3 frases curtas (no máximo 350 caracteres), usando apenas "
+    "fatos presentes no texto e destacando números relevantes; não repita o título; sem markdown, "
+    "emojis nem aspas; deixe vazio se o texto não trouxer nada além do título."
 )
+FORMATO_RESUMO = {"format": {"type": "json_schema", "name": "noticia", "strict": True, "schema": {
+    "type": "object",
+    "properties": {"pais": {"type": "string"}, "resumo": {"type": "string"}},
+    "required": ["pais", "resumo"],
+    "additionalProperties": False,
+}}}
+
+# reserva quando a IA não responde: país pelo domínio do site
+PAIS_POR_DOMINIO = {".pt": "PORTUGAL", ".es": "ESPANHA", ".it": "ITÁLIA", ".fr": "FRANÇA", ".de": "ALEMANHA",
+                    ".uk": "REINO UNIDO", ".ar": "ARGENTINA", ".mx": "MÉXICO", ".cl": "CHILE",
+                    ".pe": "PERU", ".uy": "URUGUAI", ".py": "PARAGUAI", ".ao": "ANGOLA",
+                    ".mz": "MOÇAMBIQUE", ".vn": "VIETNÃ", ".in": "ÍNDIA", ".cn": "CHINA", ".jp": "JAPÃO",
+                    ".ru": "RÚSSIA", ".ca": "CANADÁ", ".au": "AUSTRÁLIA"}
 
 
-def resumir(titulo: str, subtitulo: str, texto: str) -> str:
-    if not OPENAI_API_KEY or len(texto) < 200:
-        return ""
+def pais_pelo_dominio(link: str) -> str:
+    dominio = urllib.parse.urlparse(link).netloc.lower()
+    return next((pais for fim, pais in PAIS_POR_DOMINIO.items() if dominio.endswith(fim)), "")
+
+
+def resumir(titulo: str, subtitulo: str, texto: str, fonte: str = "", link: str = ""):
+    """-> (resumo, país). País vazio se não deu para identificar."""
+    if not OPENAI_API_KEY:
+        return "", ""
     try:
         r = requests.post(
             "https://api.openai.com/v1/responses",
             headers={"Authorization": f"Bearer {OPENAI_API_KEY}"},
-            json={"model": OPENAI_MODELO, "instructions": INSTRUCOES_RESUMO,
-                  "input": f"Título: {titulo}\nSubtítulo: {subtitulo}\n\nTexto:\n{texto}",
+            json={"model": OPENAI_MODELO, "instructions": INSTRUCOES_RESUMO, "text": FORMATO_RESUMO,
+                  "input": f"Fonte: {fonte} ({urllib.parse.urlparse(link).netloc})\n"
+                           f"Título: {titulo}\nSubtítulo: {subtitulo}\n\nTexto:\n{texto}",
                   "max_output_tokens": 1000},
             timeout=60,
         )
         if not r.ok:
             print(f"[erro openai] {r.status_code} {r.text[:300]}")
-            return ""
-        partes = [c.get("text", "") for item in r.json().get("output", []) if item.get("type") == "message"
-                  for c in item.get("content", []) if c.get("type") == "output_text"]
-        return " ".join(partes).strip()
+            return "", ""
+        saida = " ".join(c.get("text", "") for item in r.json().get("output", []) if item.get("type") == "message"
+                         for c in item.get("content", []) if c.get("type") == "output_text").strip()
+        try:
+            dados = json.loads(saida)
+            return dados.get("resumo", "").strip(), dados.get("pais", "").strip().upper()
+        except ValueError:
+            return saida, ""  # veio texto solto: usa como resumo
     except Exception as err:
         print(f"[erro openai] {err}")
-        return ""
+        return "", ""
 
 # =========================================================
 # 6. ALERTA
@@ -379,10 +409,16 @@ def marcador(nota: int) -> str:
     return "🔴" if nota >= NOTA_VERMELHA else "🟡" if nota >= NOTA_AMARELA else "⚪"
 
 
+def rotulo(item) -> str:
+    """Bolinha + [PAÍS] quando a notícia não é do Brasil. Ex.: 🟡[PORTUGAL]"""
+    pais = item.get("pais", "")
+    return marcador(item["nota"]) + (f"[{pais}]" if pais and pais != "BRASIL" else "")
+
+
 def bloco_noticia(item) -> str:
     """Uma notícia dentro da mensagem agrupada."""
     titulo = sem_marcacao(item["titulo"])
-    linhas = [f"{marcador(item['nota'])} *{titulo}*"]
+    linhas = [f"{rotulo(item)} *{titulo}*"]
     # o resumo da IA substitui o subtítulo para a mensagem não ficar enorme
     texto = item.get("resumo_ia") or sem_marcacao(item.get("subtitulo", ""))[:350]
     if texto and texto.lower() != titulo.lower():
@@ -407,7 +443,7 @@ def bloco_curto(item) -> str:
     if len(titulo) > 90:
         titulo = titulo[:87].rstrip() + "…"
     outros = f" · +{len(item['outras_fontes'])} sites" if item.get("outras_fontes") else ""
-    return f"{marcador(item['nota'])} {titulo}\n   {item.get('link_curto') or item['link']}{outros}"
+    return f"{rotulo(item)} {titulo}\n   {item.get('link_curto') or item['link']}{outros}"
 
 
 def tamanho_whatsapp(texto: str) -> int:
@@ -496,10 +532,13 @@ def completar(item, completo=True, curto=False):
     if completo:
         subtitulo, texto = ler_materia(item["link"])
         item["subtitulo"] = subtitulo or item["resumo"]
-        item["resumo_ia"] = resumir(item["titulo"], item["subtitulo"], texto or item["resumo"])
+        item["resumo_ia"], item["pais"] = resumir(item["titulo"], item["subtitulo"], texto or item["resumo"],
+                                                  item["fonte"], item["link"])
+    if not item.get("pais"):
+        item["pais"] = pais_pelo_dominio(item["link"])
     if curto:
         item["link_curto"] = encurtar(item["link"])
-    print(f"{datetime.now():%H:%M:%S} {marcador(item['nota'])} [{item['tema']}] {item['titulo']}  ({item['fonte']})")
+    print(f"{datetime.now():%H:%M:%S} {rotulo(item)} [{item['tema']}] {item['titulo']}  ({item['fonte']})")
 
 # =========================================================
 # 7. NOTÍCIAS PARECIDAS (mesmo fato publicado por vários sites)
