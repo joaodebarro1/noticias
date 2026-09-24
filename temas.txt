@@ -74,11 +74,20 @@ buscar:   Ultrapar OR UGPA3 OR "postos Ipiranga"; Ipiranga combustíveis
 palavras: ultrapar=4, ugpa3=4, ipiranga=3
 
 
+[POLÍTICA DE COMBUSTÍVEIS]
+# medidas do governo que mexem no preço/mercado de combustíveis: alto interesse
+buscar:   subsídio etanol OR diesel OR gasolina OR combustíveis; subvenção diesel OR combustíveis; desoneração OR reoneração combustíveis; decreto OR "medida provisória" combustíveis OR etanol OR diesel; CNPE etanol OR biodiesel OR combustíveis; "Ministério de Minas e Energia" combustíveis
+palavras: subsídio*=4, subsidia=4, subsidiar=4, subvenç*=4, desoneraç*=4, reoneraç*=4, medida provisória=3, decreto*=3, isenç*=3, crédito* tributário*=3, cnpe=3, ministério de minas e energia=2, regulament*=2, retroativ*=2, governo=1
+
 [URGENTES]
 palavras: urgente=2, breaking=2, exclusivo=2, surpreend*=2, inesperad*=2
 
 [IGNORAR]
-palavras: assalt*, baleado*, tiroteio, homicídio, latrocínio, esfaque*
+# tragédias, crimes e acidentes: descartadas antes de qualquer outra regra
+# (a IA também barra as que escaparem destas palavras)
+# evite palavras que também aparecem em economia: "disparou" (preço), "agressiva", "tombam" (ações), "sequestro de carbono"
+palavras: assalt*, baleado*, tiroteio, tiro, tiros, homicídio*, latrocínio*, esfaque*, facada*, assassin*, matar, matou, mataram, morto*, morta*, morre*, morte*, óbito*, feminicídio*, estupr*, espanca*, agride, agrediu, agredid*, agressão, linchad*, chacina*, violência, ex-companheira, ex-mulher, ex-namorada, cadáver*
+palavras: acidente*, capot*, colisão, atropel*, engavetamento, incêndio*, pegou fogo, tragédia*, desastre*, enchente*, desabamento, soterrad*
 
 [FONTES]
 # --- agregadores: as buscas de cada assunto rodam em todos ---

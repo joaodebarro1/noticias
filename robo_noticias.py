@@ -345,12 +345,14 @@ INSTRUCOES_RESUMO = (
     "global sem um país específico (ex.: cotação do Brent, decisões da OPEP). "
     "resumo: em português do Brasil, 2 ou 3 frases curtas (no máximo 350 caracteres), usando apenas "
     "fatos presentes no texto e destacando números relevantes; não repita o título; sem markdown, "
-    "emojis nem aspas; deixe vazio se o texto não trouxer nada além do título."
+    "emojis nem aspas; deixe vazio se o texto não trouxer nada além do título. "
+    "tragedia: true se a notícia for sobre crime violento, morte, acidente, incêndio, desastre ou outra "
+    "tragédia envolvendo pessoas (mesmo que aconteça num posto ou envolva combustível); false caso contrário."
 )
 FORMATO_RESUMO = {"format": {"type": "json_schema", "name": "noticia", "strict": True, "schema": {
     "type": "object",
-    "properties": {"pais": {"type": "string"}, "resumo": {"type": "string"}},
-    "required": ["pais", "resumo"],
+    "properties": {"pais": {"type": "string"}, "resumo": {"type": "string"}, "tragedia": {"type": "boolean"}},
+    "required": ["pais", "resumo", "tragedia"],
     "additionalProperties": False,
 }}}
 
@@ -368,9 +370,9 @@ def pais_pelo_dominio(link: str) -> str:
 
 
 def resumir(titulo: str, subtitulo: str, texto: str, fonte: str = "", link: str = ""):
-    """-> (resumo, país). País vazio se não deu para identificar."""
+    """-> (resumo, país, é_tragédia). País vazio se não deu para identificar."""
     if not OPENAI_API_KEY:
-        return "", ""
+        return "", "", False
     try:
         r = requests.post(
             "https://api.openai.com/v1/responses",
@@ -383,17 +385,18 @@ def resumir(titulo: str, subtitulo: str, texto: str, fonte: str = "", link: str 
         )
         if not r.ok:
             print(f"[erro openai] {r.status_code} {r.text[:300]}")
-            return "", ""
+            return "", "", False
         saida = " ".join(c.get("text", "") for item in r.json().get("output", []) if item.get("type") == "message"
                          for c in item.get("content", []) if c.get("type") == "output_text").strip()
         try:
             dados = json.loads(saida)
-            return dados.get("resumo", "").strip(), dados.get("pais", "").strip().upper()
+            return (dados.get("resumo", "").strip(), dados.get("pais", "").strip().upper(),
+                    bool(dados.get("tragedia")))
         except ValueError:
-            return saida, ""  # veio texto solto: usa como resumo
+            return saida, "", False  # veio texto solto: usa como resumo
     except Exception as err:
         print(f"[erro openai] {err}")
-        return "", ""
+        return "", "", False
 
 # =========================================================
 # 6. ALERTA
@@ -532,7 +535,7 @@ def completar(item, completo=True, curto=False):
     if completo:
         subtitulo, texto = ler_materia(item["link"])
         item["subtitulo"] = subtitulo or item["resumo"]
-        item["resumo_ia"], item["pais"] = resumir(item["titulo"], item["subtitulo"], texto or item["resumo"],
+        item["resumo_ia"], item["pais"], item["tragedia"] = resumir(item["titulo"], item["subtitulo"], texto or item["resumo"],
                                                   item["fonte"], item["link"])
     if not item.get("pais"):
         item["pais"] = pais_pelo_dominio(item["link"])
@@ -622,9 +625,22 @@ def montar_e_enviar(escolhidas, prefixo="", registrar_enviadas=True):
     if not alvo:
         return 0
 
-    # abre as matérias em paralelo (link real, resumo da IA, link curto)
+    # abre as matérias em paralelo (link real, resumo da IA, link curto); a IA roda sempre,
+    # porque é ela que confere se a notícia é tragédia
     with ThreadPoolExecutor(max_workers=6) as pool:
-        list(pool.map(lambda i: completar(i, completo=tem_telegram, curto=id(i) in ids_vermelhas), alvo))
+        list(pool.map(lambda i: completar(i, completo=True, curto=id(i) in ids_vermelhas), alvo))
+
+    # 2ª barreira contra tragédias (a 1ª é o [IGNORAR] do temas.txt)
+    tragedias = [i for i in alvo if i.get("tragedia")]
+    for item in tragedias:
+        print(f"  [descartada: tragédia] {item['titulo']}")
+        if registrar_enviadas:
+            registrar(item, "TRAGÉDIA", -1)
+    escolhidas = [i for i in escolhidas if not i.get("tragedia")]
+    vermelhas = [i for i in vermelhas if not i.get("tragedia")]
+    alvo = [i for i in alvo if not i.get("tragedia")]
+    if not alvo:
+        return 0
 
     if tem_telegram:
         blocos = [bloco_noticia(i) for i in escolhidas]
