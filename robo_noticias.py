@@ -552,7 +552,23 @@ def teste():
         print("Nenhuma notícia bateu com as palavras de temas.txt agora.")
 
 
+def regua():
+    # mensagem com linhas numeradas para descobrir onde o CallMeBot/WhatsApp corta textos longos:
+    # cada linha mostra quantos caracteres a mensagem tem até ali
+    linhas = ["📏 *RÉGUA* · 40 linhas numeradas"]
+    for i in range(1, 41):
+        total = sum(len(l) + 1 for l in linhas)
+        linhas.append(f"{i:02d} | até aqui {total:04d} caracteres | ação preço gás")
+    msg = "\n".join(linhas) + "\n🏁 FIM DA RÉGUA"
+    print(f"Régua: {len(msg)} caracteres")
+    enviar(msg)
+
+
 if __name__ == "__main__":
+    if "--regua" in sys.argv:
+        regua()
+        sys.exit(0)
+
     if MODO_TESTE:
         teste()
         sys.exit(0)

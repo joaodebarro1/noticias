@@ -11,6 +11,10 @@ on:
         description: "Só mandar uma notícia de teste (Telegram/WhatsApp/OpenAI)"
         type: boolean
         default: false
+      regua:
+        description: "Só mandar a régua (mensagem longa numerada, para medir onde o WhatsApp corta)"
+        type: boolean
+        default: false
 
 # nunca roda duas execuções ao mesmo tempo (evita alertas duplicados)
 concurrency:
@@ -43,7 +47,7 @@ jobs:
           restore-keys: noticias-db-
 
       - name: Rodar um ciclo (ou teste)
-        run: python robo_noticias.py ${{ inputs.teste && '--teste' || '--uma-vez' }}
+        run: python robo_noticias.py ${{ inputs.regua && '--regua' || inputs.teste && '--teste' || '--uma-vez' }}
         env:
           PYTHONUNBUFFERED: "1"
           TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
@@ -54,7 +58,7 @@ jobs:
           OPENAI_MODEL: ${{ vars.OPENAI_MODEL }}
 
       - name: Salvar histórico
-        if: always() && !inputs.teste
+        if: always() && !inputs.teste && !inputs.regua
         uses: actions/cache/save@v6
         with:
           path: noticias.db
