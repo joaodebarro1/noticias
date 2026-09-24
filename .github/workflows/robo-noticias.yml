@@ -1,11 +1,12 @@
 name: Robo de noticias
 
 on:
+  # O agendamento principal (a cada 30 min) vem de fora: cron-job.org chama a API do GitHub
+  # (workflow_dispatch). O agendamento do próprio GitHub é irregular (chegou a rodar 4 vezes
+  # em 14h), então fica só como reserva a cada 3h, caso o cron-job.org falhe ou a chave vença.
   schedule:
-    # a cada 30 min, em minutos "quebrados": nos minutos :00 e :30 o GitHub fica
-    # congestionado e costuma atrasar ou pular execuções agendadas
-    - cron: "7,37 * * * *"
-  workflow_dispatch:         # botão "Run workflow" para rodar na mão
+    - cron: "17 */3 * * *"
+  workflow_dispatch:         # cron-job.org e o botão "Run workflow"
     inputs:
       teste:
         description: "Só mandar uma notícia de teste (Telegram/WhatsApp/OpenAI)"
