@@ -55,6 +55,7 @@ PESO_SOZINHA = 4
 PESO_PRINCIPAL = 3
 NOTA_VERMELHA = 8            # 🔴 nota >= 8
 NOTA_AMARELA = 5             # 🟡 nota >= 5 (abaixo disso ⚪)
+NOTA_MINIMA_ENVIO = NOTA_AMARELA  # ⚪ não é enviada (troque por 0 para voltar a receber)
 # Telegram: recebe todas as notícias do ciclo no formato completo (o Telegram aceita até 4096
 # caracteres por mensagem; textos maiores são divididos em várias mensagens).
 LIMITE_TELEGRAM = 4000
@@ -322,7 +323,7 @@ def pontuar(texto: str):
 
 
 def vale_alerta(resultado) -> bool:
-    if not resultado:
+    if not resultado or resultado[1] < NOTA_MINIMA_ENVIO:
         return False
     palavras = {p for ps in resultado[2].values() for p in ps}
     maior = max(PESOS[p] for p in palavras)

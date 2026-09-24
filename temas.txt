@@ -19,6 +19,7 @@
 #
 #  Nota = soma dos pesos de todas as palavras encontradas (+ URGENTES)
 #    🔴 nota 8 ou mais    🟡 nota 5 a 7    ⚪ nota até 4
+#    Só 🔴 e 🟡 são enviadas (Telegram: 🔴 e 🟡; WhatsApp: só 🔴). ⚪ é ignorada.
 #
 #  Como as palavras são encontradas:
 #    - maiúsculas e acentos não importam (raizen = Raízen)
