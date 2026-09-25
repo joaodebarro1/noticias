@@ -421,7 +421,7 @@ def rotulo(item) -> str:
 def bloco_noticia(item) -> str:
     """Uma notícia dentro da mensagem agrupada."""
     titulo = sem_marcacao(item["titulo"])
-    linhas = [f"{rotulo(item)} *{titulo}*"]
+    linhas = [f"{rotulo(item)}{'🔄' if item.get('atualizacao') else ''} *{titulo}*"]
     # o resumo da IA substitui o subtítulo para a mensagem não ficar enorme
     texto = item.get("resumo_ia") or sem_marcacao(item.get("subtitulo", ""))[:350]
     if texto and texto.lower() != titulo.lower():
@@ -446,7 +446,7 @@ def bloco_curto(item) -> str:
     if len(titulo) > 90:
         titulo = titulo[:87].rstrip() + "…"
     outros = f" · +{len(item['outras_fontes'])} sites" if item.get("outras_fontes") else ""
-    return f"{rotulo(item)} {titulo}\n   {item.get('link_curto') or item['link']}{outros}"
+    return f"{rotulo(item)}{'🔄' if item.get('atualizacao') else ''} {titulo}\n   {item.get('link_curto') or item['link']}{outros}"
 
 
 def tamanho_whatsapp(texto: str) -> int:
@@ -563,10 +563,92 @@ def parecida(a: set, b: set) -> bool:
     return comum >= 4 and comum / min(len(a), len(b)) >= 0.6
 
 
+def titulos_enviados(horas=24):
+    desde = (datetime.now() - timedelta(hours=horas)).isoformat()
+    return [t for (t,) in db.execute(
+        "SELECT titulo FROM vistas WHERE nota > 0 AND visto_em >= ? ORDER BY visto_em", (desde,))]
+
+
 def enviadas_recentes():
-    desde = (datetime.now() - timedelta(hours=24)).isoformat()
-    return [assinatura(t) for (t,) in db.execute(
-        "SELECT titulo FROM vistas WHERE nota > 0 AND visto_em >= ?", (desde,))]
+    return [assinatura(t) for t in titulos_enviados()]
+
+
+INSTRUCOES_AGRUPAR = (
+    "Você organiza alertas de notícias para um investidor brasileiro do setor de combustíveis. "
+    "Recebe uma lista de NOVAS (numeradas, candidatas a envio) e outra de JÁ ENVIADAS nas últimas 24 horas. "
+    "Para cada NOVA, responda: "
+    "grupo: o mesmo número para NOVAS que relatam o mesmo fato (mesmo anúncio, decisão, dado ou evento), "
+    "mesmo com títulos e fontes diferentes; NOVAS sobre fatos diferentes têm grupos diferentes. "
+    "situacao: 'repetida' se o fato já aparece nas JÁ ENVIADAS e a notícia não acrescenta nada relevante; "
+    "'atualizacao' se continua um fato das JÁ ENVIADAS mas traz um desdobramento concreto e relevante "
+    "(decisão confirmada ou publicada, valor, prazo ou data novos, reação oficial); 'nova' nos demais casos. "
+    "Seja rigoroso: outra reportagem, análise, opinião ou repercussão do mesmo fato é 'repetida', não "
+    "'atualizacao'; na dúvida, escolha 'repetida'. Exemplos: depois de 'Governo deve prorrogar subsídio ao "
+    "diesel por 30 dias', as notícias 'Governo sinaliza prorrogação do subsídio' ou 'Subsídio ao diesel deve "
+    "ser mantido' são 'repetida'; já 'Governo publica decreto que prorroga o subsídio' é 'atualizacao' "
+    "(a expectativa virou decisão oficial)."
+)
+FORMATO_AGRUPAR = {"format": {"type": "json_schema", "name": "agrupamento", "strict": True, "schema": {
+    "type": "object",
+    "properties": {"noticias": {"type": "array", "items": {
+        "type": "object",
+        "properties": {"id": {"type": "integer"}, "grupo": {"type": "integer"},
+                       "situacao": {"type": "string", "enum": ["nova", "repetida", "atualizacao"]}},
+        "required": ["id", "grupo", "situacao"],
+        "additionalProperties": False,
+    }}},
+    "required": ["noticias"],
+    "additionalProperties": False,
+}}}
+
+
+def agrupar_por_fato(escolhidas, ja_enviadas, registrar_descartes=True):
+    """A IA junta notícias do mesmo fato e tira as que repetem algo enviado nas últimas 24h.
+    Se a IA falhar, devolve a lista como veio (nenhuma notícia deixa de sair por causa disso)."""
+    if not OPENAI_API_KEY or not escolhidas:
+        return escolhidas
+    novas = "\n".join(f"{i}. {n['titulo']} ({n['fonte']})" for i, n in enumerate(escolhidas))
+    enviadas = "\n".join(f"- {t}" for t in ja_enviadas[-200:]) or "(nenhuma)"
+    try:
+        r = requests.post(
+            "https://api.openai.com/v1/responses",
+            headers={"Authorization": f"Bearer {OPENAI_API_KEY}"},
+            json={"model": OPENAI_MODELO, "instructions": INSTRUCOES_AGRUPAR, "text": FORMATO_AGRUPAR,
+                  "input": f"JÁ ENVIADAS:\n{enviadas}\n\nNOVAS:\n{novas}", "max_output_tokens": 8000},
+            timeout=120,
+        )
+        if not r.ok:
+            print(f"[erro agrupar] {r.status_code} {r.text[:300]}")
+            return escolhidas
+        saida = " ".join(c.get("text", "") for item in r.json().get("output", []) if item.get("type") == "message"
+                         for c in item.get("content", []) if c.get("type") == "output_text")
+        decisoes = {d["id"]: d for d in json.loads(saida)["noticias"]}
+    except Exception as err:
+        print(f"[erro agrupar] {err}")
+        return escolhidas
+
+    ficam, lider = [], {}
+    for i, noticia in enumerate(escolhidas):  # já vêm da mais forte para a mais fraca
+        d = decisoes.get(i)
+        if d is None:  # a IA pulou esta: envia normalmente
+            ficam.append(noticia)
+            continue
+        if d["situacao"] == "repetida":
+            motivo = "repete notícia já enviada"
+        elif d["grupo"] in lider:
+            motivo = "mesmo fato de outra notícia deste ciclo"
+            principal = lider[d["grupo"]]
+            if noticia["fonte"] != principal["fonte"]:
+                principal["outras_fontes"].add(noticia["fonte"])
+        else:
+            noticia["atualizacao"] = d["situacao"] == "atualizacao"
+            lider[d["grupo"]] = noticia
+            ficam.append(noticia)
+            continue
+        print(f"  [juntada: {motivo}] {noticia['titulo']}")
+        if registrar_descartes:
+            registrar(noticia, "PARECIDA", -1)
+    return ficam
 
 # =========================================================
 # 8. CICLO PRINCIPAL
@@ -686,11 +768,14 @@ def ciclo(primeira_vez=False):
         salvar_assinatura_temas()
         return
     escolhidas = candidatas()
-    descartadas = escolhidas[MAX_NOTICIAS_POR_CICLO:]
+    total, excesso = len(escolhidas), escolhidas[100:]
+    escolhidas = agrupar_por_fato(escolhidas[:100], titulos_enviados())
+    juntadas = total - len(excesso) - len(escolhidas)
+    descartadas = escolhidas[MAX_NOTICIAS_POR_CICLO:] + excesso
     for item in descartadas:  # as mais fracas de um ciclo muito cheio não voltam no próximo
         registrar(item, "DESCARTADA", 0)
     enviadas = montar_e_enviar(escolhidas[:MAX_NOTICIAS_POR_CICLO])
-    print(f"{len(escolhidas)} notícias novas; {enviadas} enviadas"
+    print(f"{total} notícias novas; {juntadas} juntadas por serem o mesmo fato; {enviadas} enviadas"
           + (f"; {len(descartadas)} mais fracas descartadas" if descartadas else ""))
 
 
